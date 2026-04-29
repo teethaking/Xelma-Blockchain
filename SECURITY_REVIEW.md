@@ -1,479 +1,173 @@
-# Security Review Summary - XLM Prediction Market Contract
+# Security Review - XLM Prediction Market Contract
 
-**Date**: February 25, 2026  
-**Contract**: Soroban Prediction Market Smart Contract (Dual-Mode)  
-**Version**: 2.0.0  
-**Status**: ✅ All security improvements implemented and tested (99 tests passing)
+**Review date:** 2026-04-29  
+**Contributor / owner:** TBD (assign security review owner)  
+**Reviewer context:** Focused maintainer security refresh of the current Soroban contract, Rust tests, and generated TypeScript bindings. This is not an external audit.  
+**Contract:** Soroban XLM prediction market, dual-mode Up/Down and Precision  
+**Current confidence:** Medium-high for testnet / integration use; external audit recommended before mainnet.  
+**Overall status:** Actionable with 1 open medium item, 2 accepted design risks, and no open high/critical findings found in this pass.
 
----
+## Scope
 
-## Executive Summary
+Reviewed files:
 
-Comprehensive security review of the dual-mode XLM prediction market contract.
-The contract supports two prediction modes — **Up/Down** and **Precision (Legends)** —
-with full oracle validation, configurable time windows, and claim-based payouts.
-All **99 tests** pass across **11 active test modules**, with **24 custom error types**
-covering every failure path.
+| Area | Files | Coverage |
+| --- | --- | --- |
+| Contract core | `contracts/src/contract.rs`, `contracts/src/errors.rs`, `contracts/src/types.rs` | Initialization, roles, pause, round lifecycle, betting, precision predictions, oracle resolution, payouts, storage cleanup |
+| Contract tests | `contracts/src/tests/*.rs` | Unit/security/property/storage tests included by `contracts/src/tests/mod.rs` |
+| Bindings | `bindings/src/index.ts`, `bindings/src/parity.js`, `bindings/package.json` | Public method surface and client-facing error map |
+| Supporting docs | `README.md`, `STORAGE_DESIGN.md`, `ROUND_LIFECYCLE.md`, `MIGRATION.md` | Architecture and operational context |
 
----
+Out of scope:
 
-## Security Improvements Implemented
+- On-chain deployment configuration and admin key custody.
+- Live oracle infrastructure, signer operations, and price source quality.
+- Formal verification, fuzzing beyond the current property tests, and third-party audit.
 
-### 1. Custom Error Handling ✅
+## Methodology
 
-**24 distinct error types** provide clear, debuggable failure codes for every
-invalid state and input:
+1. Re-read the current contract, error types, storage model, tests, and bindings.
+2. Mapped high-risk flows to code locations: auth, storage layout, arithmetic, oracle payload handling, lifecycle transitions, and bindings drift.
+3. Ran the current verification suite:
+   - `cargo test` -> 118 passed, 0 failed.
+   - `npm --prefix bindings run test:parity` -> passed public method parity.
+4. Compared the current implementation against the prior review and recent repository history:
+   - `ab8a8f4` merge for precision remainder / bindings CI.
+   - `9855391` merge for storage optimization.
+   - `7fb45b2` merge for single-active-round guard.
+   - `45dd076` merge for checked claim arithmetic.
 
-```rust
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum ContractError {
-    /// Contract has already been initialized
-    AlreadyInitialized = 1,
-    /// Admin address not set - call initialize first
-    AdminNotSet = 2,
-    /// Oracle address not set - call initialize first
-    OracleNotSet = 3,
-    /// Only admin can perform this action
-    UnauthorizedAdmin = 4,
-    /// Only oracle can perform this action
-    UnauthorizedOracle = 5,
-    /// Bet amount must be greater than zero
-    InvalidBetAmount = 6,
-    /// No active round exists
-    NoActiveRound = 7,
-    /// Round has already ended
-    RoundEnded = 8,
-    /// User has insufficient balance
-    InsufficientBalance = 9,
-    /// User has already placed a bet in this round
-    AlreadyBet = 10,
-    /// Arithmetic overflow occurred
-    Overflow = 11,
-    /// Invalid price value
-    InvalidPrice = 12,
-    /// Invalid duration value
-    InvalidDuration = 13,
-    /// Invalid round mode (must be 0 or 1)
-    InvalidMode = 14,
-    /// Wrong prediction type for current round mode
-    WrongModeForPrediction = 15,
-    /// Round has not reached end_ledger yet
-    RoundNotEnded = 16,
-    /// Invalid price scale (must represent 4 decimal places)
-    InvalidPriceScale = 17,
-    /// Oracle data is too old (STALE)
-    StaleOracleData = 18,
-    /// Oracle payload round_id doesn't match ActiveRound
-    InvalidOracleRound = 19,
-    /// An active round already exists and cannot be overwritten
-    RoundAlreadyActive = 20,
-    /// Admin and Oracle addresses cannot be identical
-    AdminIsOracle = 21,
-    /// Contract is paused for emergency recovery
-    ContractPaused = 22,
-    /// One or more window values exceed configured maximum bounds
-    WindowOutOfRange = 23,
-    /// Oracle payload timestamp is in the future
-    FutureOracleData = 24,
-}
+## Quantitative Metrics
+
+| Metric | Current value | Notes |
+| --- | ---: | --- |
+| Contract implementation size | 1,304 LOC | `contracts/src/contract.rs` |
+| Error enum size | 25 variants | `contracts/src/errors.rs` |
+| Type definitions size | 105 LOC | `contracts/src/types.rs` |
+| TypeScript bindings size | 765 LOC | `bindings/src/index.ts` |
+| Test modules | 13 | All modules included by `contracts/src/tests/mod.rs` |
+| Contract tests | 118 | Counted by `#[test]`; confirmed by `cargo test` |
+| Public contract methods | 19 | Covered by generated client surface and parity script |
+| Binding parity | Passing | Method-level parity only |
+
+Test distribution:
+
+| Module | Tests | Main coverage |
+| --- | ---: | --- |
+| `betting.rs` | 9 | Bet validation, duplicates, events, position queries |
+| `edge_cases.rs` | 5 | Empty rounds, one-sided rounds, pending/stat overflow boundaries |
+| `guard_tests.rs` | 4 | Single-active-round invariant and non-mutation on rejection |
+| `initialization.rs` | 8 | Init, auth, mint, duplicate init, admin/oracle separation |
+| `lifecycle.rs` | 14 | Round creation, auth, full lifecycle, events |
+| `mode_tests.rs` | 21 | Up/Down vs Precision isolation, precision scales, events |
+| `overflow_tests.rs` | 6 | Payout overflow and all-or-nothing claim behavior |
+| `pause.rs` | 4 | Admin pause/unpause and paused mutation guards |
+| `property_invariants.rs` | 3 | Payout conservation and stats monotonicity |
+| `resolution.rs` | 22 | Up/Down and Precision payout behavior, ties, remainders |
+| `security.rs` | 4 | Oracle freshness, future timestamp, round-id replay, valid payload |
+| `storage_benchmarks.rs` | 5 | Indexed key writes and resolution cleanup |
+| `windows.rs` | 13 | Window bounds, timing, auth, precision window enforcement |
+
+## Threat Model
+
+Primary assets:
+
+- User vXLM balances, pending winnings, and round funds represented in contract storage.
+- Round integrity: one active round at a time, stable round IDs, correct pool accounting.
+- Oracle resolution integrity: price, timestamp, and round binding.
+- Client correctness: bindings must expose the same method/error surface as the contract.
+
+Trust boundaries:
+
+- Admin is trusted to initialize the contract, configure windows, create rounds, and pause/unpause.
+- Oracle signer is trusted to submit accurate prices for the intended round.
+- Users are untrusted and may try invalid auth, duplicate bets, timing abuse, overflow inputs, or storage growth attacks.
+- TypeScript clients depend on generated bindings and error maps for operational safety.
+
+Soroban-specific risk considerations:
+
+- **Auth:** state-changing role/user operations call `require_auth()` on the expected `Address`; pause/unpause and windows are admin-gated, resolution is oracle-gated, user actions are user-gated.
+- **Storage:** persistent storage uses indexed per-user keys plus `RoundParticipants(round_id)` to avoid rewriting full maps on each bet, with legacy map fallbacks for migration.
+- **Arithmetic:** critical arithmetic uses checked operations. Payout paths increasingly route through `payout_add` / `payout_mul`, but one Precision indexed path still returns generic `Overflow` rather than `PayoutOverflow`.
+- **Oracle inputs:** `OraclePayload` enforces non-zero price, timestamp not in the future, 300-second freshness, and round binding against `Round.start_ledger`.
+- **Resource limits:** resolution is O(n) over participants; extremely large rounds remain bounded by transaction/resource limits rather than by a contract-level participant cap.
+
+## Findings
+
+| ID | Severity | Status | Finding | Evidence / code locations | Impact | Mitigation plan / owner |
+| --- | --- | --- | --- | --- | --- | --- |
+| SR-2026-04-001 | Medium | Open | TypeScript `ContractError` map is stale for Rust variants 24 and 25. Method parity passes, but client-side decoding lacks `FutureOracleData` and `PayoutOverflow`. | Rust variants: `contracts/src/errors.rs:56-59`. Binding map stops at 23: `bindings/src/index.ts:39-132`. `npm --prefix bindings run test:parity` only checks methods in `bindings/src/parity.js`. | Frontends, bots, and monitoring may display unknown errors or mis-handle future oracle timestamps and payout overflow failures. | Owner: Bindings maintainer (TBD). Regenerate/update bindings, add enum/error parity to `bindings/src/parity.js`, then run `npm --prefix bindings run test:parity` and `npm --prefix bindings run lint`. |
+| SR-2026-04-002 | Low | Open | Indexed Precision payout path uses generic `Overflow` for total pot, diff, remainder, and pending accumulation, while legacy Precision and Up/Down payout helpers use `PayoutOverflow`. | Indexed path: `contracts/src/contract.rs:913-973`. Helper policy: `contracts/src/contract.rs:1284-1302`. Tests assert `PayoutOverflow` for claim/refund/updown paths in `contracts/src/tests/overflow_tests.rs`. | Inconsistent error semantics can make payout incident triage harder, although arithmetic is still checked and no unchecked overflow was found. | Owner: Contract maintainer (TBD). Route indexed Precision payout arithmetic through `payout_add` where applicable and add a regression test for precision payout overflow. |
+| SR-2026-04-003 | Low | Accepted risk | Oracle payload round binding uses `round.start_ledger` as the payload `round_id`, not the monotonic `Round.round_id`. | `OraclePayload.round_id: u32` documented as `Round.start_ledger` in `contracts/src/types.rs`; check at `contracts/src/contract.rs:648-650`; stable `Round.round_id` exists at `contracts/src/contract.rs:130-152`. | This blocks cross-round replay while only one active round exists, but the field name is ambiguous and external oracle operators may supply `Round.round_id` by mistake. | Owner: Oracle integration owner (TBD). Keep accepted for current ABI; document oracle payload semantics in integration docs. For the next breaking ABI, rename field or switch to `u64 round_id` matching `Round.round_id`. |
+| SR-2026-04-004 | Medium | Accepted risk | The oracle remains a single trusted signer. Payload freshness and round checks protect replay/staleness but not bad signed prices. | Oracle auth and payload validation: `contracts/src/contract.rs:633-668`; tests in `contracts/src/tests/security.rs`. | A compromised or faulty oracle can resolve rounds with incorrect but fresh prices. | Owner: Protocol/security owner (TBD). Accepted for current architecture. Before mainnet, define oracle operations, monitoring, emergency pause playbook, and consider multi-oracle or threshold validation. |
+| SR-2026-04-005 | Low | Accepted risk | Resolution loops over the participant list and has no explicit participant cap. | Participant append: `contracts/src/contract.rs:334-344` and `contracts/src/contract.rs:447-457`; resolution cleanup: `contracts/src/contract.rs:684-702`; storage tests in `contracts/src/tests/storage_benchmarks.rs`. | Very large rounds can become expensive or fail under Soroban resource limits, delaying resolution. Indexed storage mitigates write amplification but does not remove O(n) resolution cost. | Owner: Contract/product owner (TBD). Accepted for current testnet scale. Add operational round-size monitoring; consider a participant cap or batched resolution before high-volume deployment. |
+| SR-2026-04-006 | High | Mitigated | Multiple active rounds could corrupt lifecycle state. | Guard: `contracts/src/contract.rs:115-116` and `contracts/src/contract.rs:1276-1279`; tests in `contracts/src/tests/guard_tests.rs`; related commit `7fb45b2`. | Prevents overwriting live round state and orphaning user positions. | No further action unless lifecycle semantics change. |
+| SR-2026-04-007 | High | Mitigated | Payout and claim arithmetic overflow could corrupt balances or panic. | Checked claim/refund/updown helpers: `contracts/src/contract.rs:1085-1171`, `contracts/src/contract.rs:1284-1302`; tests in `contracts/src/tests/overflow_tests.rs`; related commit `45dd076`. | Overflow paths return errors and avoid partial writes in covered payout paths. | Extend consistency to indexed Precision as tracked in SR-2026-04-002. |
+| SR-2026-04-008 | High | Mitigated | Unauthorized admin/oracle/user operations. | Initialization/admin checks: `contracts/src/contract.rs:21-25`, `contracts/src/contract.rs:55-80`, `contracts/src/contract.rs:212-220`; user auth: `contracts/src/contract.rs:286`, `contracts/src/contract.rs:392`, `contracts/src/contract.rs:1087`, `contracts/src/contract.rs:1231`; oracle auth: `contracts/src/contract.rs:633-640`. Tests across `initialization.rs`, `lifecycle.rs`, `pause.rs`, and `windows.rs`. | Prevents impersonation of admin, oracle, and users. | Continue adding auth regression tests when new public methods are added. |
+| SR-2026-04-009 | Medium | Mitigated | Late betting / premature resolution can bias outcomes. | Bet window checks: `contracts/src/contract.rs:305-307`, `contracts/src/contract.rs:417-419`; resolution end-ledger check: `contracts/src/contract.rs:665-668`; window validation: `contracts/src/contract.rs:222-234`; tests in `contracts/src/tests/windows.rs`. | Bets close before observation window completes, and resolution cannot happen early. | No further action unless timing model changes. |
+| SR-2026-04-010 | Medium | Mitigated | Oracle replay, stale payloads, and future-dated data. | Payload checks: `contracts/src/contract.rs:628-668`; tests in `contracts/src/tests/security.rs`. | Blocks zero price, wrong-round, stale, future, and premature oracle resolution. | Pair with accepted single-oracle risk follow-ups in SR-2026-04-004. |
+| SR-2026-04-011 | Medium | Mitigated | Mode confusion between Up/Down and Precision rounds. | Mode checks: `contracts/src/contract.rs:97-106`, `contracts/src/contract.rs:300-303`, `contracts/src/contract.rs:412-415`; tests in `contracts/src/tests/mode_tests.rs`. | Users cannot submit the wrong prediction type for a round. | No further action. |
+| SR-2026-04-012 | Medium | Mitigated | Storage write amplification from full participant maps. | Indexed storage writes: `contracts/src/contract.rs:315-344`, `contracts/src/contract.rs:427-457`; cleanup: `contracts/src/contract.rs:684-702`; design doc `STORAGE_DESIGN.md`; related commit `9855391`. | Reduces per-bet cost and avoids repeated full-map serialization. | Monitor resource usage for high-participant rounds as tracked in SR-2026-04-005. |
+
+## Severity Summary
+
+| Status | Critical | High | Medium | Low | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Open | 0 | 0 | 1 | 1 | 2 |
+| Accepted risk | 0 | 0 | 1 | 2 | 3 |
+| Mitigated | 0 | 3 | 4 | 0 | 7 |
+| **Total** | **0** | **3** | **6** | **3** | **12** |
+
+## Current Security Posture
+
+Strengths:
+
+- Role separation is explicit: admin, oracle, and user calls each authenticate the relevant address.
+- One active round is enforced and tested.
+- Emergency pause now exists and blocks high-risk mutations.
+- Oracle resolution requires a structured payload with price, timestamp, and round binding.
+- Betting and resolution windows are bounded and tested.
+- Indexed participant storage reduces write amplification and preserves migration fallbacks.
+- Payout conservation and core invariants are covered by tests.
+
+Primary residual risks:
+
+- Binding error map drift is the only open medium item found in this pass.
+- Single-oracle trust remains the largest accepted protocol-level risk.
+- Large participant rounds may hit Soroban resource ceilings during resolution.
+- Current review is maintainer-focused and should not replace an external audit for mainnet.
+
+## Verification Evidence
+
+Commands run during this review:
+
+```text
+cargo test
+running 118 tests
+test result: ok. 118 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+npm --prefix bindings run test:parity
+ABI parity check passed: All contract methods are synced with TS bindings.
 ```
 
-**Benefits**:
-
-- Clear error codes for debugging and frontend integration
-- Graceful failure handling (no `panic!()` or `expect()`)
-- Mode-aware validation (`InvalidMode`, `WrongModeForPrediction`)
-- Oracle integrity checking (`StaleOracleData`, `InvalidOracleRound`)
-
----
-
-### 2. Arithmetic Overflow Protection ✅
-
-**All arithmetic operations use checked variants** throughout the contract:
-
-```rust
-// Balance deduction with overflow check
-let new_balance = user_balance
-    .checked_sub(amount)
-    .ok_or(ContractError::Overflow)?;
-
-// Pool updates with overflow protection
-round.pool_up = round.pool_up
-    .checked_add(amount)
-    .ok_or(ContractError::Overflow)?;
-
-// Payout calculation with overflow check
-let share_numerator = position.amount
-    .checked_mul(losing_pool)
-    .ok_or(ContractError::Overflow)?;
-
-// Precision mode: total pot accumulation
-total_pot = total_pot
-    .checked_add(pred.amount)
-    .ok_or(ContractError::Overflow)?;
-
-// Precision mode: winner payout accumulation
-let new_pending = existing_pending
-    .checked_add(payout_per_winner)
-    .ok_or(ContractError::Overflow)?;
-```
-
-**Protection against**:
-
-- Integer overflow attacks in both Up/Down and Precision modes
-- Underflow in balance calculations
-- Multiplication overflow in payout calculations
-- Pot accumulation overflow in Precision mode
-
----
-
-### 3. Authorization & Access Control ✅
-
-**Role-based permissions enforced** with Soroban `require_auth()`:
-
-| Role   | Permissions                                     | Enforcement             |
-| ------ | ----------------------------------------------- | ----------------------- |
-| Admin  | Create rounds, set windows, initialize contract | `admin.require_auth()`  |
-| Oracle | Resolve rounds (via `OraclePayload`)            | `oracle.require_auth()` |
-| Users  | Bet, predict, claim winnings, mint tokens       | `user.require_auth()`   |
-
-**Security measures**:
-
-- ✅ Initialization can only occur once (`AlreadyInitialized`)
-- ✅ Admin and Oracle addresses are immutable after initialization
-- ✅ `set_windows()` is admin-only with duration validation
-- ✅ Users cannot bet or predict on behalf of others
-- ✅ Oracle resolution requires matching `round_id` and fresh `timestamp`
-
----
-
-### 4. Input Validation ✅
-
-**All inputs validated before processing**:
-
-```rust
-// Price validation
-if start_price == 0 {
-    return Err(ContractError::InvalidPrice);
-}
-
-// Round mode validation
-if mode_val > 1 {
-    return Err(ContractError::InvalidMode);
-}
-
-// Bet amount validation
-if amount <= 0 {
-    return Err(ContractError::InvalidBetAmount);
-}
-
-// Precision price scale validation (4 decimal places, 0.0001–99.9999)
-if predicted_price == 0 || predicted_price > 999_999 {
-    return Err(ContractError::InvalidPriceScale);
-}
-
-// Window validation
-if bet_ledgers == 0 || run_ledgers == 0 {
-    return Err(ContractError::InvalidDuration);
-}
-if bet_ledgers >= run_ledgers {
-    return Err(ContractError::InvalidDuration);
-}
-```
-
-**Prevents**:
-
-- Zero-value exploits
-- Invalid mode selection (only 0 or 1)
-- Price-scale manipulation in Precision mode
-- Misconfigured time windows (bet window must be shorter than run window)
-- Negative balance tricks
-
----
-
-### 5. Oracle Payload Validation ✅
-
-**New in this version**: The oracle no longer receives a bare price. It submits a
-structured `OraclePayload` with three checked fields:
-
-```rust
-pub struct OraclePayload {
-    pub price: u128,      // Final price (non-zero)
-    pub timestamp: u64,   // Data timestamp
-    pub round_id: u32,    // Must match Round.start_ledger
-}
-```
-
-**Security checks**:
-
-| Check          | Code                                     | Error                |
-| -------------- | ---------------------------------------- | -------------------- |
-| Non-zero price | `payload.price == 0`                     | `InvalidPrice`       |
-| Round ID match | `payload.round_id != round.start_ledger` | `InvalidOracleRound` |
-| Data freshness | `current_time > payload.timestamp + 300` | `StaleOracleData`    |
-| Future data    | `payload.timestamp > current_time`       | `FutureOracleData`   |
-| Round ended    | `current_ledger < round.end_ledger`      | `RoundNotEnded`      |
-
-**Prevents**:
-
-- **Cross-round replay attacks**: Oracle data from round N cannot resolve round M
-- **Stale data injection**: Data older than 5 minutes is rejected
-- **Future-dated payloads**: Data with timestamps from the future is rejected
-- **Premature resolution**: Round cannot be resolved before `end_ledger`
-
----
-
-### 6. Precision Mode-Specific Risks ✅
-
-Precision (Legends) mode introduces unique attack surfaces that are addressed:
-
-| Risk                        | Mitigation                                                                                                                          |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Price-scale gaming**      | Predictions must fall within `1–999_999` (0.0001–99.9999 XLM); enforced via `InvalidPriceScale`                                     |
-| **Tie exploitation**        | Ties split pot evenly — no advantage to duplicate predictions since `AlreadyBet` prevents multi-entry                               |
-| **Pot drainage**            | Total pot is computed via checked arithmetic; payout per winner = `total_pot / winner_count`                                        |
-| **Loser stat manipulation** | Losers have stats updated correctly; winners are identified via absolute-difference comparison                                      |
-| **Wrong-mode prediction**   | `place_bet` on Precision round → `WrongModeForPrediction`; `place_precision_prediction` on Up/Down round → `WrongModeForPrediction` |
-
-**Precision resolution algorithm**:
-
-1. Calculate absolute difference `|predicted_price - final_price|` for each entry
-2. Find minimum difference; collect all entries with that minimum (ties)
-3. Compute `total_pot` from all entries' amounts
-4. Award `total_pot / winner_count` to each winner
-5. Update win stats for winners, loss stats for losers
-
----
-
-### 7. Bet/Run Window System ✅
-
-Configurable time windows separate the betting phase from the observation phase:
-
-```rust
-pub fn set_windows(env: Env, bet_ledgers: u32, run_ledgers: u32)
-    -> Result<(), ContractError>
-```
-
-| Constraint        | Enforcement                                                  |
-| ----------------- | ------------------------------------------------------------ |
-| Admin-only access | `admin.require_auth()`                                       |
-| Positive values   | `bet_ledgers == 0 \|\| run_ledgers == 0` → `InvalidDuration` |
-| Bet < Run         | `bet_ledgers >= run_ledgers` → `InvalidDuration`             |
-| Defaults          | `bet_ledgers = 12`, `run_ledgers = 60` (if unconfigured)     |
-
-**Round timeline**: `start_ledger` → `bet_end_ledger` (betting closes) → `end_ledger` (resolution allowed)
-
-**Prevents**:
-
-- Bets placed after observation has begun (late-bet front-running)
-- Resolution before the observation window completes
-
----
-
-### 8. Event Emission ✅
-
-The contract emits Soroban events on round resolution for off-chain observability:
-
-```rust
-env.events().publish(
-    (symbol_short!("round"), symbol_short!("resolved")),
-    payload.price,
-);
-```
-
-Events enable:
-
-- Off-chain indexing and monitoring
-- Frontend real-time updates
-- Audit trail of all resolutions
-
----
-
-### 9. State Consistency Checks ✅
-
-**Round state validation**:
-
-```rust
-// Check if round exists
-let round = env.storage()
-    .persistent()
-    .get(&DataKey::ActiveRound)
-    .ok_or(ContractError::NoActiveRound)?;
-
-// Check if betting window is still open
-if current_ledger >= round.bet_end_ledger {
-    return Err(ContractError::RoundEnded);
-}
-
-// Prevent double betting (Up/Down mode)
-if positions.contains_key(user.clone()) {
-    return Err(ContractError::AlreadyBet);
-}
-
-// Prevent double prediction (Precision mode)
-// Checks existing PrecisionPositions Vec for user address
-```
-
-**Guarantees**:
-
-- Users can only bet/predict during the active betting window
-- One bet/prediction per user per round (both modes)
-- Proper round lifecycle management with storage cleanup after resolution
-
----
-
-### 10. Economic Security ✅
-
-**Up/Down Mode — Proportional payout algorithm**:
-
-```rust
-// Fair distribution formula
-let share = (position.amount * losing_pool) / winning_pool;
-let payout = position.amount + share;
-```
-
-**Precision Mode — Winner-takes-all (or split)**:
-
-```rust
-let payout_per_winner = total_pot / winner_count;
-```
-
-**Properties**:
-
-- ✅ Up/Down winners get bet back + proportional share of losers' pool
-- ✅ Precision winners split the entire pot evenly
-- ✅ Unchanged price in Up/Down mode → everyone gets a refund
-- ✅ No funds can be lost (claim-based withdrawal pattern)
-- ✅ `winning_pool == 0` is handled (early return, no division by zero)
-- ✅ Integer division prevents rounding exploits
-
----
-
-## Common Vulnerabilities Assessment
-
-| Vulnerability        | Risk Level | Status       | Notes                                                        |
-| -------------------- | ---------- | ------------ | ------------------------------------------------------------ |
-| Reentrancy           | N/A        | ✅           | Not applicable to Soroban (no external calls)                |
-| Integer Overflow     | High       | ✅ Fixed     | All arithmetic uses checked operations in both modes         |
-| Unauthorized Access  | High       | ✅ Fixed     | Role-based permissions with `require_auth()`                 |
-| Double Spending      | Medium     | ✅ Fixed     | Balance checks before deductions                             |
-| Front-running        | Medium     | ✅ Mitigated | Oracle-based resolution + bet/run window separation          |
-| Division by Zero     | Medium     | ✅ Fixed     | `winning_pool > 0` and `winner_count > 0` guards             |
-| Griefing             | Low        | ✅ Fixed     | Window durations configurable, positive-value enforced       |
-| State Corruption     | High       | ✅ Fixed     | Atomic operations with full storage cleanup after resolution |
-| Oracle Replay        | High       | ✅ Fixed     | `round_id` matching prevents cross-round data replay         |
-| Stale Oracle Data    | Medium     | ✅ Fixed     | 300-second freshness check on `OraclePayload.timestamp`      |
-| Premature Resolution | Medium     | ✅ Fixed     | `current_ledger >= end_ledger` check before resolution       |
-| Mode Mismatch        | Medium     | ✅ Fixed     | `WrongModeForPrediction` prevents wrong-mode bets            |
-| Price-Scale Gaming   | Medium     | ✅ Fixed     | 4-decimal validation (`1–999_999`) on precision predictions  |
-
----
-
-## Testing Coverage
-
-**99/99 tests passing** ✅
-
-### Test Modules:
-
-| Module           | Tests | Coverage Area                                                                                                                                                                                                    |
-| ---------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode_tests`     | 18    | Default/explicit mode creation, invalid mode, cross-mode rejection, precision predictions, duplicate prevention, position queries, balance checks, price scale validation, `predict_price` alias, event emission |
-| `resolution`     | 13    | Price up/down/unchanged, one-sided bets, precision resolution (single winner, ties, exact match, all same guess), no participants                                                                                |
-| `windows`        | 9     | Admin-only access, positive values, bet < run constraint, configured/default windows, bet window closure, resolution timing, precision window respect                                                            |
-| `security`       | 4     | Stale oracle timestamp, future oracle timestamp, invalid round ID, valid payload acceptance                                                                                                                      |
-| `betting`        | 7     | Zero/negative amounts, no active round, round ended, insufficient balance, double bet, position queries                                                                                                          |
-| `initialization` | 5     | Mint, re-mint prevention, balance queries, init, double-init                                                                                                                                                     |
-| `lifecycle`      | 5     | Round creation, unauthorized creation, active round queries, full lifecycle, multiple rounds                                                                                                                     |
-| `edge_cases`     | 3     | No participants, one-sided bets, pending winnings accumulation                                                                                                                                                   |
-| `property_invariants` | 3 | User stats monotonicity, payout conservation                                                                                                                                                                    |
-
-> **Note**: `security.rs` contains 3 additional tests (stale oracle timestamp, invalid round ID, valid payload acceptance) that are present in the source but are not currently executed by the default test runner.
-
----
-
-## Code Quality Metrics
-
-- **Contract implementation**: `contract.rs` — 770 lines
-- **Error types**: `errors.rs` — 49 lines (19 variants)
-- **Type definitions**: `types.rs` — 84 lines (8 types including `RoundMode`, `PrecisionPrediction`, `OraclePayload`)
-- **Test suite**: 8 modules, ~72K bytes total
-- **Module structure**: `lib.rs` → `contract`, `errors`, `types`, `tests`
-- **Test coverage**: 100% of public functions across both modes
-- **Documentation**: Comprehensive inline doc-comments on all public types and functions
-
----
-
-## Recommendations for Production
-
-### ✅ Already Implemented
-
-1. Custom error handling (24 error types)
-2. Overflow protection (checked arithmetic in both modes)
-3. Authorization checks (admin, oracle, user)
-4. Input validation (prices, amounts, modes, scales, windows)
-5. Oracle integrity (round-id matching, staleness check, future timestamp guard, end-ledger guard)
-6. Comprehensive testing (99 tests across 11 modules)
-7. Event emission on resolution
-
-### 🔄 Future Enhancements (Optional)
-
-1. **Pause Mechanism**: Admin ability to pause contract in emergencies
-2. **Upgradability**: Consider using contract upgradability pattern
-3. **Rate Limiting**: Limit number of rounds per time period
-4. **Oracle Diversity**: Support multiple oracle sources for price feeds
-5. **Precision Mode Refunds**: Refund all participants if no predictions are close enough (threshold-based)
-
-### 📋 Pre-Deployment Checklist
-
-- ✅ All 99 tests passing
-- ✅ Error handling implemented (24 types)
-- ✅ Security review completed
-- ✅ Code documented
-- ✅ Oracle validation hardened
-- ⬜ External audit (recommended for mainnet)
-- ⬜ Gas optimization review
-- ⬜ Integration testing with frontend
-
----
-
-## Security Best Practices Followed
-
-1. ✅ **Checks-Effects-Interactions (CEI)**: State updates before external calls
-2. ✅ **Fail-safe defaults**: Graceful error handling with descriptive codes
-3. ✅ **Least privilege**: Minimal permissions for each role
-4. ✅ **Defense in depth**: Multiple layers of validation (input, state, oracle)
-5. ✅ **Clear separation**: Admin, Oracle, User roles isolated
-6. ✅ **Immutable roles**: Admin/Oracle cannot be changed after initialization
-7. ✅ **Explicit over implicit**: Clear error codes and validation
-8. ✅ **Mode isolation**: Up/Down and Precision logic separated with cross-mode guards
-9. ✅ **Temporal guards**: Bet/run windows and oracle freshness checks
-10. ✅ **Clean teardown**: All mode-specific storage keys removed after resolution
-
----
-
-## Conclusion
-
-The XLM Prediction Market smart contract has undergone comprehensive security hardening with:
-
-- ✅ **24 custom error types** covering all failure modes across both prediction modes
-- ✅ **Checked arithmetic** preventing overflow attacks in all calculation paths
-- ✅ **Role-based access control** with Soroban `require_auth()`
-- ✅ **Oracle payload validation** with round-ID matching, staleness checks, and end-ledger guards
-- ✅ **Precision mode security** with price-scale enforcement, tie handling, and cross-mode rejection
-- ✅ **Configurable time windows** preventing late-bet front-running and premature resolution
-- ✅ **99 passing tests** across 11 active modules covering all scenarios for both modes
-- ✅ **Event emission** for off-chain observability and auditability
-
-**Security Status**: Production-ready for testnet deployment  
-**Recommendation**: External audit recommended before mainnet deployment
-
----
-
-**Reviewed by**: Security Review Refresh (Issue #40)  
-**Tools Used**: Soroban SDK v23.4.0, Rust 1.92.0  
-**Testing Framework**: Soroban testutils  
-**Source Files**: `contracts/src/` (contract.rs, errors.rs, types.rs, tests/)
-
-
+Important caveat: `bindings/src/parity.js` validates public method parity, not error enum parity. That is why SR-2026-04-001 remains open even though the parity script passes.
+
+## Follow-Up Backlog
+
+| Priority | Item | Owner | Target evidence |
+| --- | --- | --- | --- |
+| P1 | Fix binding error map for `FutureOracleData` and `PayoutOverflow`; add error enum parity check. | Bindings maintainer (TBD) | Updated `bindings/src/index.ts`, enhanced `bindings/src/parity.js`, passing `npm --prefix bindings run test:parity` |
+| P2 | Normalize indexed Precision payout overflow errors to `PayoutOverflow`. | Contract maintainer (TBD) | Updated arithmetic path and new precision overflow regression test |
+| P2 | Document oracle payload `round_id` semantics for integrators. | Oracle integration owner (TBD) | README / integration docs showing `payload.round_id = activeRound.start_ledger` |
+| P2 | Define oracle operations and incident response before mainnet. | Protocol/security owner (TBD) | Oracle runbook, monitoring checks, pause criteria |
+| P3 | Add operational limits or monitoring for large participant rounds. | Contract/product owner (TBD) | Participant-count policy, resource benchmark, or cap design |
+| P3 | Schedule external audit before mainnet deployment. | Maintainers (TBD) | Audit report or issue tracking external findings |
+
+## Deployment Recommendation
+
+Proceed with testnet/integration usage after assigning owners for the open items. Do not treat the current state as mainnet-ready until:
+
+1. SR-2026-04-001 is closed.
+2. Oracle operations and pause response are documented.
+3. Maintainers decide whether to fix or explicitly accept SR-2026-04-002.
+4. An external audit is completed for any production-value deployment.
