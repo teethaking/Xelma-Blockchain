@@ -100,7 +100,11 @@ fn bench_place_bet_op_count_assertion() {
     let round = client.get_active_round().unwrap();
 
     for (i, u) in users.iter().enumerate() {
-        let side = if i % 2 == 0 { BetSide::Up } else { BetSide::Down };
+        let side = if i % 2 == 0 {
+            BetSide::Up
+        } else {
+            BetSide::Down
+        };
         client.place_bet(u, &(10_0000000 + i as i128), &side);
     }
 
@@ -149,7 +153,11 @@ fn bench_resolve_cleans_indexed_keys() {
     let round = client.get_active_round().unwrap();
 
     for (i, u) in users.iter().enumerate() {
-        let side = if i % 2 == 0 { BetSide::Up } else { BetSide::Down };
+        let side = if i % 2 == 0 {
+            BetSide::Up
+        } else {
+            BetSide::Down
+        };
         client.place_bet(u, &50_0000000, &side);
     }
 
@@ -201,7 +209,11 @@ fn bench_large_round_resolves_correctly() {
 
     // Half UP, half DOWN — equal amounts so the math is easy to verify
     for (i, u) in users.iter().enumerate() {
-        let side = if i % 2 == 0 { BetSide::Up } else { BetSide::Down };
+        let side = if i % 2 == 0 {
+            BetSide::Up
+        } else {
+            BetSide::Down
+        };
         client.place_bet(u, &10_0000000, &side);
     }
 

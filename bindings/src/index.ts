@@ -128,7 +128,35 @@ export const ContractError = {
   /**
    * One or more window values exceed configured maximum bounds
    */
-  23: {message:"WindowOutOfRange"}
+  23: {message:"WindowOutOfRange"},
+  /**
+   * Oracle payload timestamp is in the future
+   */
+  24: {message:"FutureOracleData"},
+  /**
+   * Arithmetic overflow in payout accumulation — no funds moved
+   */
+  25: {message:"PayoutOverflow"},
+  /**
+   * Round has been cancelled and cannot be resolved
+   */
+  26: {message:"RoundCancelled"},
+  /**
+   * Round cannot be cancelled (no active round or already resolved)
+   */
+  27: {message:"RoundNotCancellable"},
+  /**
+   * Bet amount exceeds the configured maximum stake
+   */
+  28: {message:"StakeExceedsMax"},
+  /**
+   * User's cumulative exposure in this round exceeds the configured cap
+   */
+  29: {message:"ExposureCapExceeded"},
+  /**
+   * Pending winnings accumulation would exceed the configured cap
+   */
+  30: {message:"PendingWinningsCapExceeded"}
 }
 
 /**
@@ -142,7 +170,7 @@ export enum RoundMode {
 /**
  * Storage keys for contract data
  */
-export type DataKey = {tag: "Balance", values: readonly [string]} | {tag: "Admin", values: void} | {tag: "Oracle", values: void} | {tag: "ActiveRound", values: void} | {tag: "Positions", values: void} | {tag: "UpDownPositions", values: void} | {tag: "PrecisionPositions", values: void} | {tag: "PendingWinnings", values: readonly [string]} | {tag: "UserStats", values: readonly [string]} | {tag: "Paused", values: void} | {tag: "BetWindowLedgers", values: void} | {tag: "RunWindowLedgers", values: void} | {tag: "LastRoundId", values: void} | {tag: "Position", values: readonly [u64, string]} | {tag: "PrecisionPosition", values: readonly [u64, string]} | {tag: "RoundParticipants", values: readonly [u64]};
+export type DataKey = {tag: "Balance", values: readonly [string]} | {tag: "Admin", values: void} | {tag: "Oracle", values: void} | {tag: "ActiveRound", values: void} | {tag: "Positions", values: void} | {tag: "UpDownPositions", values: void} | {tag: "PrecisionPositions", values: void} | {tag: "PendingWinnings", values: readonly [string]} | {tag: "UserStats", values: readonly [string]} | {tag: "Paused", values: void} | {tag: "BetWindowLedgers", values: void} | {tag: "RunWindowLedgers", values: void} | {tag: "LastRoundId", values: void} | {tag: "Position", values: readonly [u64, string]} | {tag: "PrecisionPosition", values: readonly [u64, string]} | {tag: "RoundParticipants", values: readonly [u64]} | {tag: "MaxStake", values: void} | {tag: "MaxUserRoundExposure", values: void} | {tag: "MaxPendingWinnings", values: void} | {tag: "CancelledRound", values: readonly [u64]};
 
 /**
  * Represents which side a user bet on
@@ -684,6 +712,87 @@ export interface Client {
     simulate?: boolean;
   }) => Promise<AssembledTransaction<i128>>
 
+  /**
+   * Construct and simulate a set_max_stake transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Sets the maximum stake allowed per individual bet (admin only). Pass null to disable.
+   */
+  set_max_stake: ({max_amount}: {max_amount: Option<i128>}, options?: {
+    fee?: number;
+    timeoutInSeconds?: number;
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
+   * Construct and simulate a get_max_stake transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Returns the current maximum stake cap, if set.
+   */
+  get_max_stake: (options?: {
+    fee?: number;
+    timeoutInSeconds?: number;
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<Option<i128>>>
+
+  /**
+   * Construct and simulate a set_max_user_exposure transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Sets the maximum cumulative exposure a user may have per round (admin only). Pass null to disable.
+   */
+  set_max_user_exposure: ({max_exposure}: {max_exposure: Option<i128>}, options?: {
+    fee?: number;
+    timeoutInSeconds?: number;
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
+   * Construct and simulate a get_max_user_exposure transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Returns the current per-user round exposure cap, if set.
+   */
+  get_max_user_exposure: (options?: {
+    fee?: number;
+    timeoutInSeconds?: number;
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<Option<i128>>>
+
+  /**
+   * Construct and simulate a set_max_pending_winnings transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Sets the maximum pending winnings allowed per account (admin only). Pass null to disable.
+   */
+  set_max_pending_winnings: ({max_pending}: {max_pending: Option<i128>}, options?: {
+    fee?: number;
+    timeoutInSeconds?: number;
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
+   * Construct and simulate a get_max_pending_winnings transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Returns the current maximum pending winnings cap, if set.
+   */
+  get_max_pending_winnings: (options?: {
+    fee?: number;
+    timeoutInSeconds?: number;
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<Option<i128>>>
+
+  /**
+   * Construct and simulate a cancel_round transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Cancels the active round and refunds all participants (admin only).
+   * reason: operator-defined cancellation code (e.g. 1 = oracle_unavailable)
+   */
+  cancel_round: ({reason}: {reason: u32}, options?: {
+    fee?: number;
+    timeoutInSeconds?: number;
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
+   * Construct and simulate a is_round_cancelled transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Returns true if the given round_id was cancelled.
+   */
+  is_round_cancelled: ({round_id}: {round_id: u64}, options?: {
+    fee?: number;
+    timeoutInSeconds?: number;
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<boolean>>
+
 }
 export class Client extends ContractClient {
   static async deploy<T = Client>(
@@ -760,6 +869,14 @@ export class Client extends ContractClient {
         resolve_round: this.txFromJSON<Result<void>>,
         claim_winnings: this.txFromJSON<Result<i128>>,
         mint_initial: this.txFromJSON<i128>,
-        balance: this.txFromJSON<i128>
+        balance: this.txFromJSON<i128>,
+        set_max_stake: this.txFromJSON<Result<void>>,
+        get_max_stake: this.txFromJSON<Option<i128>>,
+        set_max_user_exposure: this.txFromJSON<Result<void>>,
+        get_max_user_exposure: this.txFromJSON<Option<i128>>,
+        set_max_pending_winnings: this.txFromJSON<Result<void>>,
+        get_max_pending_winnings: this.txFromJSON<Option<i128>>,
+        cancel_round: this.txFromJSON<Result<void>>,
+        is_round_cancelled: this.txFromJSON<boolean>
   }
 }

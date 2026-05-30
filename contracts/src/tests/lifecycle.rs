@@ -705,7 +705,10 @@ fn test_cancel_round_emits_event() {
             && topics.get(0).unwrap().try_into_val(&env) == Ok(symbol_short!("round"))
             && topics.get(1).unwrap().try_into_val(&env) == Ok(symbol_short!("cancelled"))
     });
-    assert!(cancel_event.is_some(), "Cancellation event should be emitted");
+    assert!(
+        cancel_event.is_some(),
+        "Cancellation event should be emitted"
+    );
 }
 
 #[test]
@@ -760,5 +763,8 @@ fn test_cancel_round_full_refund_equals_pool() {
         + client.get_pending_winnings(&bob)
         + client.get_pending_winnings(&charlie);
 
-    assert_eq!(total_refunded, total_pool, "Total refunds must equal total pool");
+    assert_eq!(
+        total_refunded, total_pool,
+        "Total refunds must equal total pool"
+    );
 }

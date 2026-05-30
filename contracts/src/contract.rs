@@ -274,9 +274,7 @@ impl VirtualTokenContract {
             if v < MIN_CAP_VALUE {
                 return Err(ContractError::InvalidBetAmount);
             }
-            env.storage()
-                .persistent()
-                .set(&DataKey::MaxStake, &v);
+            env.storage().persistent().set(&DataKey::MaxStake, &v);
         } else {
             env.storage().persistent().remove(&DataKey::MaxStake);
         }
@@ -290,7 +288,10 @@ impl VirtualTokenContract {
 
     /// Sets the maximum cumulative exposure a user may have per round (admin only).
     /// Pass `None` to disable the cap.
-    pub fn set_max_user_exposure(env: Env, max_exposure: Option<i128>) -> Result<(), ContractError> {
+    pub fn set_max_user_exposure(
+        env: Env,
+        max_exposure: Option<i128>,
+    ) -> Result<(), ContractError> {
         let admin: Address = env
             .storage()
             .persistent()
@@ -354,9 +355,7 @@ impl VirtualTokenContract {
 
     /// Returns the current maximum pending winnings cap, if set.
     pub fn get_max_pending_winnings(env: Env) -> Option<i128> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::MaxPendingWinnings)
+        env.storage().persistent().get(&DataKey::MaxPendingWinnings)
     }
 
     /// Returns user statistics (wins, losses, streaks)
@@ -1517,11 +1516,7 @@ impl VirtualTokenContract {
     ///
     /// Reads and writes `DataKey::PendingWinnings(user)` in one place, ensuring the cap
     /// check and overflow protection are applied consistently across all payout paths.
-    fn _accumulate_pending(
-        env: &Env,
-        user: Address,
-        amount: i128,
-    ) -> Result<(), ContractError> {
+    fn _accumulate_pending(env: &Env, user: Address, amount: i128) -> Result<(), ContractError> {
         let key = DataKey::PendingWinnings(user);
         let existing: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         let new_pending = Self::payout_add(existing, amount)?;

@@ -34,7 +34,9 @@ fn test_guard_success_path_no_active_round() {
     client.create_round(&start_price, &None);
 
     // Post-condition: active round stored with correct values
-    let round = client.get_active_round().expect("round must exist after create");
+    let round = client
+        .get_active_round()
+        .expect("round must exist after create");
     assert_eq!(round.price_start, start_price);
     assert_eq!(round.round_id, 1);
     assert_eq!(round.pool_up, 0);

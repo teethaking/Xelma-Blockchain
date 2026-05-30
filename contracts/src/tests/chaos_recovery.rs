@@ -25,7 +25,13 @@ use soroban_sdk::{
 
 // ─── helper ──────────────────────────────────────────────────────────────────
 
-fn setup_contract() -> (Env, Address, Address, Address, VirtualTokenContractClient<'static>) {
+fn setup_contract() -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    VirtualTokenContractClient<'static>,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register(VirtualTokenContract, ());
@@ -192,7 +198,7 @@ fn test_chaos_resolve_empty_round_clean_state() {
 
 #[test]
 fn test_chaos_double_cancel_returns_not_cancellable() {
-    let (env, _cid, _admin, _oracle, client) = setup_contract();
+    let (_env, _cid, _admin, _oracle, client) = setup_contract();
 
     client.create_round(&1_0000000, &None);
     client.cancel_round(&0u32);
