@@ -325,6 +325,7 @@ fn test_resolution_only_allowed_after_run_ledgers() {
         price: 1_5000000,
         timestamp: env.ledger().timestamp(),
         round_id: 0,
+        nonce: 1u64,
     });
     assert_eq!(result, Err(Ok(ContractError::RoundNotEnded)));
 
@@ -338,6 +339,7 @@ fn test_resolution_only_allowed_after_run_ledgers() {
         price: 1_5000000,
         timestamp: env.ledger().timestamp(),
         round_id: 0,
+        nonce: 1u64,
     });
 
     // Round should be cleared

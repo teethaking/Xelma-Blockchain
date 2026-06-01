@@ -2,6 +2,7 @@
 
 mod betting;
 mod chaos_recovery;
+mod cost_benchmarks;
 mod edge_cases;
 mod guard_tests;
 mod initialization;

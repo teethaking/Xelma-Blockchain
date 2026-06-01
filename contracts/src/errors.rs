@@ -67,4 +67,6 @@ pub enum ContractError {
     ExposureCapExceeded = 29,
     /// Pending winnings accumulation would exceed the configured cap
     PendingWinningsCapExceeded = 30,
+    /// Oracle payload nonce was already consumed for this round (replay)
+    OracleNonceReused = 31,
 }

@@ -166,6 +166,7 @@ fn bench_resolve_cleans_indexed_keys() {
         price: 2_0000000,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     env.as_contract(&contract_id, || {
@@ -228,6 +229,7 @@ fn bench_large_round_resolves_correctly() {
         price: 2_0000000,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     // Each UP winner should have pending = bet + (bet/winning_pool) * losing_pool
@@ -317,6 +319,7 @@ fn bench_precision_mode_indexed_keys() {
         price: 580u128,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     // Bob wins entire pot (3 * 10_0000000)

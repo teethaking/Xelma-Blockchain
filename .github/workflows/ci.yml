@@ -43,6 +43,9 @@ jobs:
       - name: Run cargo test
         run: cargo test --workspace --verbose --locked
 
+      - name: Benchmark report (cost/gas regression guardrails)
+        run: cargo test --package xelma-contract cost_benchmarks --locked -- --nocapture
+
       - name: Run cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 

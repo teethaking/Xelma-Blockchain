@@ -1,0 +1,7 @@
+# Force contributors through a structured template instead of blank issues,
+# so every backlog item carries risk, scope, acceptance criteria, and a test plan.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/TevaLabs/Xelma-Blockchain/blob/main/SUPPORT.md
+    about: Do not file public issues for exploitable vulnerabilities. Use the private disclosure path described in SUPPORT.md.

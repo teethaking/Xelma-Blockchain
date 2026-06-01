@@ -449,6 +449,7 @@ fn test_predict_price_valid_scales() {
                 price: round.price_start,
                 timestamp: env.ledger().timestamp(),
                 round_id: round.start_ledger,
+                nonce: 1u64,
             });
         }
 
@@ -618,6 +619,7 @@ fn test_all_events_for_updown_round() {
         price: 1_5000000, // Price went up
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     let events = env.events().all();
@@ -735,6 +737,7 @@ fn test_all_events_for_precision_round() {
         price: 2_2500000, // Closest to user2's prediction
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     let events = env.events().all();

@@ -156,7 +156,11 @@ export const ContractError = {
   /**
    * Pending winnings accumulation would exceed the configured cap
    */
-  30: {message:"PendingWinningsCapExceeded"}
+  30: {message:"PendingWinningsCapExceeded"},
+  /**
+   * Oracle payload nonce was already consumed for this round (replay)
+   */
+  31: {message:"OracleNonceReused"}
 }
 
 /**
@@ -209,6 +213,10 @@ export interface OraclePayload {
  * Round identifier that should match `Round.start_ledger`
  */
 round_id: u32;
+  /**
+ * Per-round replay-protection nonce; must be unique per submission for a round
+ */
+nonce: u64;
 }
 
 

@@ -68,6 +68,7 @@ fn test_guard_passes_after_round_resolved() {
         price: 1_5000000,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     assert!(client.get_active_round().is_none());

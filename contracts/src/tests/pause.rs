@@ -96,6 +96,7 @@ fn test_mutations_fail_while_paused() {
         price: 1_5000000,
         timestamp: env.ledger().timestamp(),
         round_id: 0,
+        nonce: 1u64,
     });
     assert_eq!(resolve_result, Err(Ok(ContractError::ContractPaused)));
 

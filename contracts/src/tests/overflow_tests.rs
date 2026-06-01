@@ -39,6 +39,7 @@ fn resolve_updown(
         price: final_price,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 }
 
@@ -168,6 +169,7 @@ fn test_record_winnings_mul_overflow_returns_payout_overflow() {
         price: 2_0000000, // price went UP — alice wins
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     assert_eq!(result, Err(Ok(ContractError::PayoutOverflow)));
@@ -203,6 +205,7 @@ fn test_record_refunds_overflow_returns_payout_overflow() {
         price: 1_0000000, // same as start_price → tie → refund
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     assert_eq!(result, Err(Ok(ContractError::PayoutOverflow)));
@@ -258,6 +261,7 @@ fn test_pending_winnings_cap_enforced_on_refund() {
         price: 1_0000000, // same price → refund
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
     assert_eq!(result, Err(Ok(ContractError::PendingWinningsCapExceeded)));
 
@@ -292,6 +296,7 @@ fn test_pending_winnings_cap_enforced_on_winnings() {
         price: 2_0000000,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
     assert_eq!(result, Err(Ok(ContractError::PendingWinningsCapExceeded)));
 }

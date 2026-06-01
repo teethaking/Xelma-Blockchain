@@ -96,6 +96,7 @@ fn test_chaos_double_resolve_returns_no_active_round() {
         price: 1_5000000,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     };
 
     // First resolve succeeds
@@ -162,6 +163,7 @@ fn test_chaos_pause_mid_round_then_unpause_resolve() {
         price: 2_0000000,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     // Invariant: alice gets her stake back (only winner, no losers)
@@ -188,6 +190,7 @@ fn test_chaos_resolve_empty_round_clean_state() {
         price: 1_5000000,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     // Invariant: clean state

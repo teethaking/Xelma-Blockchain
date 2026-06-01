@@ -96,6 +96,7 @@ proptest! {
             price: 2_0000000,
             timestamp: env.ledger().timestamp(),
             round_id: 0,
+            nonce: 1u64,
         });
 
         let alice_pending = client.get_pending_winnings(&alice);
@@ -208,6 +209,7 @@ proptest! {
             price: final_price,
             timestamp: env.ledger().timestamp(),
             round_id: 0,
+            nonce: 1u64,
         });
 
         let alice_pending = client.get_pending_winnings(&alice);

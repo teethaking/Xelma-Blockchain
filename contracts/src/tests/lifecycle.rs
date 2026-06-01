@@ -187,6 +187,7 @@ fn test_full_round_lifecycle() {
         price: final_price,
         timestamp: env.ledger().timestamp(),
         round_id: 0,
+        nonce: 1u64,
     });
 
     // Round should be cleared
@@ -269,6 +270,7 @@ fn test_multiple_rounds_lifecycle() {
         price: 1_5000000, // UP wins
         timestamp: env.ledger().timestamp(),
         round_id: round1.start_ledger,
+        nonce: 1u64,
     });
     client.claim_winnings(&alice);
 
@@ -302,6 +304,7 @@ fn test_multiple_rounds_lifecycle() {
         price: 1_5000000, // DOWN wins
         timestamp: env.ledger().timestamp(),
         round_id: round2.start_ledger,
+        nonce: 1u64,
     });
 
     let stats = client.get_user_stats(&alice);
@@ -425,6 +428,7 @@ fn test_resolve_round_fails_without_oracle_auth() {
         price: 1_1000000,
         timestamp: env.ledger().timestamp(),
         round_id: 0,
+        nonce: 1u64,
     });
     assert!(result.is_err());
 }
@@ -506,6 +510,7 @@ fn test_round_created_event_includes_mode() {
         price: 1_0000000,
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
+        nonce: 1u64,
     });
 
     client.create_round(&1_0000000, &Some(1));

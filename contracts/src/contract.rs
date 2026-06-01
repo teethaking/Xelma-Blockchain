@@ -799,6 +799,17 @@ impl VirtualTokenContract {
             return Err(ContractError::InvalidOracleRound);
         }
 
+        // Per-round nonce replay guard (Issue #118).
+        // Round-ID checks already block cross-round replays; this additionally
+        // makes resolution idempotent against accidental duplicate submissions
+        // of the same payload within a round. The consumed nonce is recorded
+        // before any settlement so a reused nonce is rejected up front.
+        let nonce_key = DataKey::ConsumedOracleNonce(round.round_id, payload.nonce);
+        if env.storage().persistent().has(&nonce_key) {
+            return Err(ContractError::OracleNonceReused);
+        }
+        env.storage().persistent().set(&nonce_key, &true);
+
         // Verify data freshness (max 300 seconds / 5 minutes old)
         let current_time = env.ledger().timestamp();
 

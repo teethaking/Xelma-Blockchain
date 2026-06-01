@@ -55,6 +55,9 @@ pub enum DataKey {
     MaxPendingWinnings,
     /// Marker for a cancelled round: round_id → true
     CancelledRound(u64),
+    /// Per-round consumed oracle nonce: (round_id, nonce) → true.
+    /// Used to reject duplicate oracle payload submissions for the same round.
+    ConsumedOracleNonce(u64, u64),
 }
 
 /// Represents which side a user bet on
@@ -97,6 +100,14 @@ pub struct OraclePayload {
     pub timestamp: u64,
     /// Round identifier that should match `Round.start_ledger`
     pub round_id: u32,
+    /// Per-round replay-protection nonce.
+    ///
+    /// The oracle service must generate a unique value per submission for a
+    /// given round (e.g. a monotonic counter or random 64-bit value). The
+    /// contract records each consumed nonce under
+    /// `DataKey::ConsumedOracleNonce(round_id, nonce)` and rejects any reuse,
+    /// making resolution idempotent against accidental duplicate submissions.
+    pub nonce: u64,
 }
 
 #[contracttype]
