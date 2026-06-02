@@ -7,6 +7,7 @@ mod edge_cases;
 mod guard_tests;
 mod initialization;
 mod lifecycle;
+mod migration_versioning;
 mod mode_tests;
 mod overflow_tests;
 mod pause;

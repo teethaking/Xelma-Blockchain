@@ -81,4 +81,10 @@ pub enum ContractError {
     InvalidOracleDeviationBps = 36,
     /// Oracle final price deviates beyond configured threshold
     OracleDeviationExceeded = 37,
+    /// Stored schema version is unknown or unsupported by this contract build
+    UnsupportedSchemaVersion = 38,
+    /// Migration path is invalid for the stored schema version
+    InvalidMigrationPath = 39,
+    /// Migration cannot run while a round is active
+    MigrationActiveRound = 40,
 }

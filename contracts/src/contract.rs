@@ -29,6 +29,9 @@ const MAX_RUN_WINDOW_LEDGERS: u32 = 2_880;
 /// 100_000 bp = 1000% deviation (effectively "off", but still explicit).
 const MAX_ORACLE_DEVIATION_BPS: u32 = 100_000;
 
+// ─── Storage schema versioning ───────────────────────────────────────────────
+const CURRENT_SCHEMA_VERSION: u32 = 2;
+
 #[contract]
 pub struct VirtualTokenContract;
 
@@ -49,6 +52,9 @@ impl VirtualTokenContract {
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage().persistent().set(&DataKey::Oracle, &oracle);
         env.storage().persistent().set(&DataKey::Paused, &false);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
 
         // Set default window values
         env.storage()
@@ -57,6 +63,47 @@ impl VirtualTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::RunWindowLedgers, &DEFAULT_RUN_WINDOW_LEDGERS);
+
+        Ok(())
+    }
+
+    /// Returns the stored schema version. If unset, returns legacy version 1.
+    pub fn get_schema_version(env: Env) -> u32 {
+        Self::_schema_version(&env).unwrap_or(1)
+    }
+
+    /// Migrates legacy schema version 1 → current schema version 2 (admin only).
+    ///
+    /// Guardrails:
+    /// - Must not have an active round (avoids partial state interpretation changes)
+    /// - Only supports v1 → v2 in this release
+    pub fn migrate_schema_v1_to_v2(env: Env) -> Result<(), ContractError> {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::AdminNotSet)?;
+        admin.require_auth();
+        Self::_ensure_not_paused(&env)?;
+
+        if env.storage().persistent().has(&DataKey::ActiveRound) {
+            return Err(ContractError::MigrationActiveRound);
+        }
+
+        let from = Self::_schema_version(&env).unwrap_or(1);
+        if from != 1 || CURRENT_SCHEMA_VERSION != 2 {
+            return Err(ContractError::InvalidMigrationPath);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("schema"), symbol_short!("migrated")),
+            (from, CURRENT_SCHEMA_VERSION),
+        );
 
         Ok(())
     }
@@ -71,6 +118,7 @@ impl VirtualTokenContract {
 
     /// Pauses the contract for emergency recovery (admin only)
     pub fn pause_contract(env: Env) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -85,6 +133,7 @@ impl VirtualTokenContract {
 
     /// Unpauses the contract after recovery (admin only)
     pub fn unpause_contract(env: Env) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -104,6 +153,7 @@ impl VirtualTokenContract {
         start_price: u128,
         mode: Option<u32>,
     ) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         if start_price == 0 {
             return Err(ContractError::InvalidPrice);
         }
@@ -282,6 +332,7 @@ impl VirtualTokenContract {
     /// `status`: 0 = active, 1 = degraded, 2 = offline.
     /// Stores current ledger timestamp; emits `("oracle", "heartbeat")`.
     pub fn update_oracle_heartbeat(env: Env, status: u32) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         if status > 2 {
             return Err(ContractError::InvalidOracleStatus);
         }
@@ -340,6 +391,7 @@ impl VirtualTokenContract {
     /// Sets the stale heartbeat threshold in seconds (admin only).
     /// Allowed range: 60–86400 seconds (1 minute to 24 hours).
     pub fn set_oracle_stale_threshold(env: Env, seconds: u64) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -369,6 +421,7 @@ impl VirtualTokenContract {
     /// bet_ledgers: Number of ledgers users can place bets
     /// run_ledgers: Total number of ledgers before round can be resolved
     pub fn set_windows(env: Env, bet_ledgers: u32, run_ledgers: u32) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -417,6 +470,7 @@ impl VirtualTokenContract {
     /// Sets the maximum stake allowed per individual bet (admin only).
     /// Pass `None` to disable the cap.
     pub fn set_max_stake(env: Env, max_amount: Option<i128>) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -447,6 +501,7 @@ impl VirtualTokenContract {
         env: Env,
         max_exposure: Option<i128>,
     ) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -485,6 +540,7 @@ impl VirtualTokenContract {
         env: Env,
         max_pending: Option<i128>,
     ) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -519,6 +575,7 @@ impl VirtualTokenContract {
     /// Rounds that end below this threshold are refunded to all participants.
     /// Pass `None` to disable the threshold.
     pub fn set_min_participants(env: Env, min: Option<u32>) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -573,6 +630,7 @@ impl VirtualTokenContract {
         amount: i128,
         side: BetSide,
     ) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         user.require_auth();
         Self::_ensure_not_paused(&env)?;
 
@@ -701,6 +759,7 @@ impl VirtualTokenContract {
         amount: i128,
         predicted_price: u128,
     ) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         user.require_auth();
         Self::_ensure_not_paused(&env)?;
 
@@ -960,6 +1019,7 @@ impl VirtualTokenContract {
     /// Mode 0 (Up/Down): Winners split losers' pool proportionally; ties get refunds
     /// Mode 1 (Precision/Legends): Closest guess wins full pot; ties split evenly
     pub fn resolve_round(env: Env, payload: OraclePayload) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         if payload.price == 0 {
             return Err(ContractError::InvalidPrice);
         }
@@ -1512,6 +1572,7 @@ impl VirtualTokenContract {
     ///  - The active round is removed; no future settlement is possible.
     ///  - The round ID is marked cancelled to prevent any replay.
     pub fn cancel_round(env: Env, reason: u32) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
             .persistent()
@@ -1596,6 +1657,7 @@ impl VirtualTokenContract {
 
     /// Claims pending winnings and adds to balance
     pub fn claim_winnings(env: Env, user: Address) -> Result<i128, ContractError> {
+        Self::_require_supported_schema(&env)?;
         user.require_auth();
         Self::_ensure_not_paused(&env)?;
 
@@ -1830,6 +1892,18 @@ impl VirtualTokenContract {
         }
 
         Ok(())
+    }
+
+    fn _schema_version(env: &Env) -> Option<u32> {
+        env.storage().persistent().get(&DataKey::SchemaVersion)
+    }
+
+    fn _require_supported_schema(env: &Env) -> Result<u32, ContractError> {
+        let v = Self::_schema_version(env).unwrap_or(1);
+        if v == 0 || v > CURRENT_SCHEMA_VERSION {
+            return Err(ContractError::UnsupportedSchemaVersion);
+        }
+        Ok(v)
     }
 
     fn assert_no_active_round(env: &Env) -> Result<(), ContractError> {

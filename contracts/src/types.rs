@@ -31,6 +31,9 @@ pub enum DataKey {
     Balance(Address),
     Admin,
     Oracle,
+    /// On-chain storage schema version for migration safety.
+    /// If missing, the contract treats it as legacy schema version 1.
+    SchemaVersion,
     ActiveRound,
     Positions,          // Legacy key — read-only migration compat
     UpDownPositions,    // Legacy key — read-only migration compat
