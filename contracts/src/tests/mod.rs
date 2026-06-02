@@ -15,3 +15,4 @@ mod resolution;
 mod security;
 mod storage_benchmarks;
 mod windows;
+mod event_coverage;
