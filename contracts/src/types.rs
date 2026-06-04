@@ -31,6 +31,9 @@ pub enum DataKey {
     Balance(Address),
     Admin,
     Oracle,
+    /// On-chain storage schema version for migration safety.
+    /// If missing, the contract treats it as legacy schema version 1.
+    SchemaVersion,
     ActiveRound,
     Positions,          // Legacy key — read-only migration compat
     UpDownPositions,    // Legacy key — read-only migration compat
@@ -64,6 +67,12 @@ pub enum DataKey {
     OracleHeartbeat,
     /// Stale-heartbeat threshold in seconds (admin-configurable); unset = 3600 s default
     OracleStaleThreshold,
+    /// Oracle max deviation threshold in basis points (1 bp = 0.01%).
+    /// If unset, deviation guardrails are disabled.
+    OracleMaxDeviationBps,
+    /// One-shot admin override allowing the next settlement to bypass deviation checks.
+    /// Automatically cleared after use.
+    OracleDeviationOverrideArmed,
 }
 
 /// Represents which side a user bet on
