@@ -1,0 +1,7 @@
+# Transitive Soroban SDK dependencies (ark-* via soroban-env-host, wasmi via soroban-wasmi).
+# No fixed upstream release in our dependency tree; not reachable as direct project code.
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0388", # derivative — unmaintained; pulled in via ark-ff/ark-ec (soroban-env-host)
+    "RUSTSEC-2024-0436", # paste — unmaintained; pulled in via ark-ff and wasmi_core (soroban)
+]
