@@ -77,6 +77,46 @@ pub enum DataKey {
     /// One-shot admin override allowing the next settlement to bypass deviation checks.
     /// Automatically cleared after use.
     OracleDeviationOverrideArmed,
+    /// Compact post-settlement summary keyed by round id for historical queries.
+    ArchivedRound(u64),
+    /// Ordered round ids for archive retention (oldest at index 0).
+    RecentArchivedRoundIds,
+    /// Timelocked pending critical config change keyed by change kind.
+    PendingConfigChange(ConfigChangeKind),
+}
+
+/// Identifies which critical risk setting is pending timelocked activation.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+#[repr(u32)]
+pub enum ConfigChangeKind {
+    Windows = 0,
+    MaxStake = 1,
+    MaxUserRoundExposure = 2,
+    MaxPendingWinnings = 3,
+    OracleStaleThreshold = 4,
+    OracleMaxDeviationBps = 5,
+}
+
+/// Payload for a scheduled critical config change.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConfigChangePayload {
+    Windows(u32, u32),
+    MaxStake(Option<i128>),
+    MaxUserRoundExposure(Option<i128>),
+    MaxPendingWinnings(Option<i128>),
+    OracleStaleThreshold(u64),
+    OracleMaxDeviationBps(Option<u32>),
+}
+
+/// Pending timelocked config change with activation ledger for on-chain observability.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingConfigChange {
+    pub payload: ConfigChangePayload,
+    pub activation_ledger: u32,
+    pub scheduled_at_ledger: u32,
 }
 
 /// Represents which side a user bet on
@@ -157,4 +197,35 @@ pub struct Round {
     pub pool_up: i128,       // Total vXLM bet on UP
     pub pool_down: i128,     // Total vXLM bet on DOWN
     pub mode: RoundMode,     // Round mode: UpDown (0) or Precision (1)
+}
+
+/// Terminal outcome recorded when a round leaves the active state.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+#[repr(u32)]
+pub enum RoundArchiveStatus {
+    /// Oracle settlement completed (normal resolution path).
+    Resolved = 0,
+    /// Admin cancelled the round and refunded participants.
+    Cancelled = 1,
+    /// Settlement aborted due to insufficient participants; stakes refunded.
+    FallbackRefund = 2,
+}
+
+/// Compact historical round summary persisted after resolve or cancel.
+///
+/// Designed for explorer/analytics queries without replaying events.
+/// `price_final` is `0` for admin cancellations (no oracle settlement price).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArchivedRoundSummary {
+    pub round_id: u64,
+    pub price_start: u128,
+    pub price_final: u128,
+    pub mode: RoundMode,
+    pub status: RoundArchiveStatus,
+    pub pool_up: i128,
+    pub pool_down: i128,
+    pub participant_count: u32,
+    pub settled_at_ledger: u32,
 }

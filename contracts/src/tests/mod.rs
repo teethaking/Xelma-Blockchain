@@ -2,6 +2,8 @@
 
 mod betting;
 mod chaos_recovery;
+mod config_helpers;
+mod config_timelock;
 mod cost_benchmarks;
 mod edge_cases;
 mod event_coverage;

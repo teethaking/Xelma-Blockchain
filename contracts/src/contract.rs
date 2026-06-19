@@ -7,8 +7,9 @@ use soroban_sdk::{
 
 use crate::errors::ContractError;
 use crate::types::{
-    BetSide, DataKey, OracleHeartbeatRecord, OraclePayload, PrecisionCommitment,
-    PrecisionPrediction, Round, RoundMode, UserPosition, UserStats,
+    ArchivedRoundSummary, BetSide, ConfigChangeKind, ConfigChangePayload, DataKey,
+    OracleHeartbeatRecord, OraclePayload, PendingConfigChange, PrecisionCommitment,
+    PrecisionPrediction, Round, RoundArchiveStatus, RoundMode, UserPosition, UserStats,
 };
 
 // ─── Economic control limits ─────────────────────────────────────────────────
@@ -41,6 +42,12 @@ const CURRENT_SCHEMA_VERSION: u32 = 2;
 const MIN_START_PRICE: u128 = 1;
 /// Maximum start price in protocol units — guards against overflow in payout math.
 const MAX_START_PRICE: u128 = 1_000_000_000_000_000_000;
+
+/// Maximum archived round summaries retained on-chain (FIFO pruning).
+const MAX_ARCHIVED_ROUNDS: u32 = 128;
+
+/// Ledger delay before a scheduled critical config change may be applied (~2 hours at ~5s/ledger).
+const CONFIG_TIMELOCK_LEDGERS: u32 = 1440;
 
 #[contract]
 pub struct VirtualTokenContract;
@@ -164,9 +171,6 @@ impl VirtualTokenContract {
         mode: Option<u32>,
     ) -> Result<(), ContractError> {
         Self::_require_supported_schema(&env)?;
-        if start_price == 0 {
-            return Err(ContractError::InvalidPrice);
-        }
         if start_price < MIN_START_PRICE {
             return Err(ContractError::StartPriceTooLow);
         }
@@ -281,6 +285,55 @@ impl VirtualTokenContract {
             .unwrap_or(0)
     }
 
+    /// Returns a compact archived round summary by round id, if retained.
+    pub fn get_archived_round(env: Env, round_id: u64) -> Option<ArchivedRoundSummary> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ArchivedRound(round_id))
+    }
+
+    /// Returns up to `limit` most recently archived rounds (newest first).
+    ///
+    /// Pass `limit = 0` to receive an empty list. Values above [`MAX_ARCHIVED_ROUNDS`]
+    /// are capped automatically.
+    pub fn get_recent_archived_rounds(env: Env, limit: u32) -> Vec<ArchivedRoundSummary> {
+        let env_ref = &env;
+        let recent: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RecentArchivedRoundIds)
+            .unwrap_or(Vec::new(env_ref));
+
+        let mut result = Vec::new(env_ref);
+        if limit == 0 || recent.is_empty() {
+            return result;
+        }
+
+        let fetch_cap = if limit > MAX_ARCHIVED_ROUNDS {
+            MAX_ARCHIVED_ROUNDS
+        } else {
+            limit
+        };
+
+        let mut fetched: u32 = 0;
+        let mut idx = recent.len();
+        while idx > 0 && fetched < fetch_cap {
+            idx -= 1;
+            if let Some(round_id) = recent.get(idx) {
+                if let Some(summary) = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::ArchivedRound(round_id))
+                {
+                    result.push_back(summary);
+                    fetched += 1;
+                }
+            }
+        }
+
+        result
+    }
+
     pub fn get_admin(env: Env) -> Option<Address> {
         env.storage().persistent().get(&DataKey::Admin)
     }
@@ -293,28 +346,9 @@ impl VirtualTokenContract {
     ///
     /// - `None`: disables deviation guardrails
     /// - `Some(bps)`: enables guardrails with a threshold in basis points (1 bp = 0.01%)
+    /// Schedules a timelocked oracle deviation update (alias for [`Self::schedule_oracle_deviation_bps`]).
     pub fn set_oracle_max_deviation_bps(env: Env, bps: Option<u32>) -> Result<(), ContractError> {
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .ok_or(ContractError::AdminNotSet)?;
-        admin.require_auth();
-        Self::_ensure_not_paused(&env)?;
-
-        if let Some(v) = bps {
-            if v == 0 || v > MAX_ORACLE_DEVIATION_BPS {
-                return Err(ContractError::InvalidOracleDeviationBps);
-            }
-            env.storage()
-                .persistent()
-                .set(&DataKey::OracleMaxDeviationBps, &v);
-        } else {
-            env.storage()
-                .persistent()
-                .remove(&DataKey::OracleMaxDeviationBps);
-        }
-        Ok(())
+        Self::schedule_oracle_deviation_bps(env, bps)
     }
 
     /// Returns the configured oracle max deviation bps, if set.
@@ -400,25 +434,10 @@ impl VirtualTokenContract {
         current_time <= record.timestamp.saturating_add(threshold)
     }
 
-    /// Sets the stale heartbeat threshold in seconds (admin only).
+    /// Schedules a timelocked stale threshold update (alias for [`Self::schedule_oracle_stale_threshold`]).
     /// Allowed range: 60–86400 seconds (1 minute to 24 hours).
     pub fn set_oracle_stale_threshold(env: Env, seconds: u64) -> Result<(), ContractError> {
-        Self::_require_supported_schema(&env)?;
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .ok_or(ContractError::AdminNotSet)?;
-        admin.require_auth();
-        Self::_ensure_not_paused(&env)?;
-
-        if seconds < MIN_ORACLE_STALE_THRESHOLD || seconds > MAX_ORACLE_STALE_THRESHOLD {
-            return Err(ContractError::InvalidStaleThreshold);
-        }
-        env.storage()
-            .persistent()
-            .set(&DataKey::OracleStaleThreshold, &seconds);
-        Ok(())
+        Self::schedule_oracle_stale_threshold(env, seconds)
     }
 
     /// Returns the configured oracle stale threshold, or the default (3600 s) if not set.
@@ -429,77 +448,19 @@ impl VirtualTokenContract {
             .unwrap_or(DEFAULT_ORACLE_STALE_THRESHOLD)
     }
 
-    /// Sets the betting and execution windows (admin only)
+    /// Schedules a timelocked windows update (alias for [`Self::schedule_windows`]).
     /// bet_ledgers: Number of ledgers users can place bets
     /// run_ledgers: Total number of ledgers before round can be resolved
     pub fn set_windows(env: Env, bet_ledgers: u32, run_ledgers: u32) -> Result<(), ContractError> {
-        Self::_require_supported_schema(&env)?;
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .ok_or(ContractError::AdminNotSet)?;
-
-        admin.require_auth();
-        Self::_ensure_not_paused(&env)?;
-
-        // Validate both values are positive
-        if bet_ledgers == 0 || run_ledgers == 0 {
-            return Err(ContractError::InvalidDuration);
-        }
-
-        // Reject out-of-range values before applying cross-field checks.
-        if bet_ledgers > MAX_BET_WINDOW_LEDGERS || run_ledgers > MAX_RUN_WINDOW_LEDGERS {
-            return Err(ContractError::WindowOutOfRange);
-        }
-
-        // Validate bet window closes before run window ends
-        if bet_ledgers >= run_ledgers {
-            return Err(ContractError::InvalidDuration);
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::BetWindowLedgers, &bet_ledgers);
-        env.storage()
-            .persistent()
-            .set(&DataKey::RunWindowLedgers, &run_ledgers);
-
-        // Emit windows update event
-        // Topic: ("windows", "updated")
-        // Payload: (bet_window_ledgers: u32, run_window_ledgers: u32)
-        #[allow(deprecated)]
-        env.events().publish(
-            (symbol_short!("windows"), symbol_short!("updated")),
-            (bet_ledgers, run_ledgers),
-        );
-
-        Ok(())
+        Self::schedule_windows(env, bet_ledgers, run_ledgers)
     }
 
     // ─── Economic controls (Issue #113) ─────────────────────────────────────
 
-    /// Sets the maximum stake allowed per individual bet (admin only).
+    /// Schedules a timelocked max stake update (alias for [`Self::schedule_max_stake`]).
     /// Pass `None` to disable the cap.
     pub fn set_max_stake(env: Env, max_amount: Option<i128>) -> Result<(), ContractError> {
-        Self::_require_supported_schema(&env)?;
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .ok_or(ContractError::AdminNotSet)?;
-        admin.require_auth();
-        Self::_ensure_not_paused(&env)?;
-
-        if let Some(v) = max_amount {
-            if v < MIN_CAP_VALUE {
-                return Err(ContractError::InvalidBetAmount);
-            }
-            env.storage().persistent().set(&DataKey::MaxStake, &v);
-        } else {
-            env.storage().persistent().remove(&DataKey::MaxStake);
-        }
-        Ok(())
+        Self::schedule_max_stake(env, max_amount)
     }
 
     /// Returns the current maximum stake cap, if set.
@@ -507,34 +468,13 @@ impl VirtualTokenContract {
         env.storage().persistent().get(&DataKey::MaxStake)
     }
 
-    /// Sets the maximum cumulative exposure a user may have per round (admin only).
+    /// Schedules a timelocked exposure cap update (alias for [`Self::schedule_max_user_exposure`]).
     /// Pass `None` to disable the cap.
     pub fn set_max_user_exposure(
         env: Env,
         max_exposure: Option<i128>,
     ) -> Result<(), ContractError> {
-        Self::_require_supported_schema(&env)?;
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .ok_or(ContractError::AdminNotSet)?;
-        admin.require_auth();
-        Self::_ensure_not_paused(&env)?;
-
-        if let Some(v) = max_exposure {
-            if v < MIN_CAP_VALUE {
-                return Err(ContractError::InvalidBetAmount);
-            }
-            env.storage()
-                .persistent()
-                .set(&DataKey::MaxUserRoundExposure, &v);
-        } else {
-            env.storage()
-                .persistent()
-                .remove(&DataKey::MaxUserRoundExposure);
-        }
-        Ok(())
+        Self::schedule_max_user_exposure(env, max_exposure)
     }
 
     /// Returns the current per-user round exposure cap, if set.
@@ -546,12 +486,140 @@ impl VirtualTokenContract {
 
     // ─── Accounting safety (Issue #120) ─────────────────────────────────────
 
-    /// Sets the maximum pending winnings allowed per account (admin only).
+    /// Schedules a timelocked pending winnings cap update (alias for [`Self::schedule_max_pending_winnings`]).
     /// Pass `None` to disable the cap.
     pub fn set_max_pending_winnings(
         env: Env,
         max_pending: Option<i128>,
     ) -> Result<(), ContractError> {
+        Self::schedule_max_pending_winnings(env, max_pending)
+    }
+
+    /// Returns the current maximum pending winnings cap, if set.
+    pub fn get_max_pending_winnings(env: Env) -> Option<i128> {
+        env.storage().persistent().get(&DataKey::MaxPendingWinnings)
+    }
+
+    // ─── Timelocked critical config (governance safety) ─────────────────────
+
+    /// Schedules a timelocked update to betting and execution windows (admin only).
+    /// The change is stored pending until `apply_scheduled_changes` is called after the delay.
+    pub fn schedule_windows(
+        env: Env,
+        bet_ledgers: u32,
+        run_ledgers: u32,
+    ) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
+        Self::_validate_windows(bet_ledgers, run_ledgers)?;
+        Self::_schedule_config_change(
+            &env,
+            ConfigChangeKind::Windows,
+            ConfigChangePayload::Windows(bet_ledgers, run_ledgers),
+        )
+    }
+
+    /// Schedules a timelocked update to the maximum stake cap (admin only).
+    pub fn schedule_max_stake(env: Env, max_amount: Option<i128>) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
+        Self::_validate_max_stake(max_amount)?;
+        Self::_schedule_config_change(
+            &env,
+            ConfigChangeKind::MaxStake,
+            ConfigChangePayload::MaxStake(max_amount),
+        )
+    }
+
+    /// Schedules a timelocked update to the per-user round exposure cap (admin only).
+    pub fn schedule_max_user_exposure(
+        env: Env,
+        max_exposure: Option<i128>,
+    ) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
+        Self::_validate_max_stake(max_exposure)?;
+        Self::_schedule_config_change(
+            &env,
+            ConfigChangeKind::MaxUserRoundExposure,
+            ConfigChangePayload::MaxUserRoundExposure(max_exposure),
+        )
+    }
+
+    /// Schedules a timelocked update to the pending winnings cap (admin only).
+    pub fn schedule_max_pending_winnings(
+        env: Env,
+        max_pending: Option<i128>,
+    ) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
+        Self::_validate_max_stake(max_pending)?;
+        Self::_schedule_config_change(
+            &env,
+            ConfigChangeKind::MaxPendingWinnings,
+            ConfigChangePayload::MaxPendingWinnings(max_pending),
+        )
+    }
+
+    /// Schedules a timelocked update to the oracle stale threshold (admin only).
+    pub fn schedule_oracle_stale_threshold(env: Env, seconds: u64) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
+        Self::_validate_oracle_stale_threshold(seconds)?;
+        Self::_schedule_config_change(
+            &env,
+            ConfigChangeKind::OracleStaleThreshold,
+            ConfigChangePayload::OracleStaleThreshold(seconds),
+        )
+    }
+
+    /// Schedules a timelocked update to the oracle max deviation threshold (admin only).
+    pub fn schedule_oracle_deviation_bps(env: Env, bps: Option<u32>) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
+        Self::_validate_oracle_max_deviation_bps(bps)?;
+        Self::_schedule_config_change(
+            &env,
+            ConfigChangeKind::OracleMaxDeviationBps,
+            ConfigChangePayload::OracleMaxDeviationBps(bps),
+        )
+    }
+
+    /// Returns a pending timelocked config change for the given kind, if any.
+    pub fn get_pending_config_change(
+        env: Env,
+        kind: ConfigChangeKind,
+    ) -> Option<PendingConfigChange> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PendingConfigChange(kind))
+    }
+
+    /// Applies a scheduled critical config change after its activation ledger (any caller).
+    pub fn apply_scheduled_changes(env: Env, kind: ConfigChangeKind) -> Result<(), ContractError> {
+        Self::_require_supported_schema(&env)?;
+        Self::_ensure_not_paused(&env)?;
+
+        let key = DataKey::PendingConfigChange(kind.clone());
+        let pending: PendingConfigChange = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(ContractError::NoPendingConfigChange)?;
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < pending.activation_ledger {
+            return Err(ContractError::ConfigChangeNotReady);
+        }
+
+        Self::_apply_config_payload(&env, &kind, &pending.payload)?;
+        env.storage().persistent().remove(&key);
+
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("config"), symbol_short!("applied")),
+            (kind, pending.activation_ledger),
+        );
+
+        Ok(())
+    }
+
+    /// Cancels a pending timelocked config change before activation (admin only).
+    pub fn cancel_config_change(env: Env, kind: ConfigChangeKind) -> Result<(), ContractError> {
         Self::_require_supported_schema(&env)?;
         let admin: Address = env
             .storage()
@@ -561,24 +629,27 @@ impl VirtualTokenContract {
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
 
-        if let Some(v) = max_pending {
-            if v < MIN_CAP_VALUE {
-                return Err(ContractError::InvalidBetAmount);
-            }
-            env.storage()
-                .persistent()
-                .set(&DataKey::MaxPendingWinnings, &v);
-        } else {
-            env.storage()
-                .persistent()
-                .remove(&DataKey::MaxPendingWinnings);
-        }
-        Ok(())
-    }
+        let key = DataKey::PendingConfigChange(kind.clone());
+        let pending: PendingConfigChange = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(ContractError::NoPendingConfigChange)?;
 
-    /// Returns the current maximum pending winnings cap, if set.
-    pub fn get_max_pending_winnings(env: Env) -> Option<i128> {
-        env.storage().persistent().get(&DataKey::MaxPendingWinnings)
+        if env.ledger().sequence() >= pending.activation_ledger {
+            return Err(ContractError::RoundNotCancellable);
+        }
+
+        let cancelled_at = env.ledger().sequence();
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("config"), symbol_short!("cancelled")),
+            (kind, cancelled_at),
+        );
+
+        env.storage().persistent().remove(&key);
+
+        Ok(())
     }
 
     // ─── Minimum participants (competitive settlement integrity) ─────────────
@@ -1388,8 +1459,15 @@ impl VirtualTokenContract {
                 .persistent()
                 .get(&DataKey::RoundParticipants(round_id))
                 .unwrap_or(Vec::new(&env));
-            let count = threshold_participants.len() as u32;
+            let count = threshold_participants.len();
             if count < min {
+                Self::_archive_round(
+                    &env,
+                    &round,
+                    RoundArchiveStatus::FallbackRefund,
+                    payload.price,
+                    count,
+                );
                 Self::_refund_under_threshold(&env, &round, &threshold_participants)?;
                 #[allow(deprecated)]
                 env.events().publish(
@@ -1424,6 +1502,16 @@ impl VirtualTokenContract {
             .persistent()
             .get(&DataKey::RoundParticipants(round_id))
             .unwrap_or(Vec::new(&env));
+        let participant_count = participants.len();
+
+        Self::_archive_round(
+            &env,
+            &round,
+            RoundArchiveStatus::Resolved,
+            payload.price,
+            participant_count,
+        );
+
         for i in 0..participants.len() {
             if let Some(user) = participants.get(i) {
                 env.storage()
@@ -1905,6 +1993,15 @@ impl VirtualTokenContract {
         }
 
         // Clean up participant list and mark round as cancelled
+        let participant_count = participants.len();
+        Self::_archive_round(
+            &env,
+            &round,
+            RoundArchiveStatus::Cancelled,
+            0,
+            participant_count,
+        );
+
         env.storage()
             .persistent()
             .remove(&DataKey::RoundParticipants(round_id));
@@ -2022,6 +2119,58 @@ impl VirtualTokenContract {
         }
 
         Ok(())
+    }
+
+    /// Persists a compact round summary and enforces FIFO archive retention.
+    fn _archive_round(
+        env: &Env,
+        round: &Round,
+        status: RoundArchiveStatus,
+        final_price: u128,
+        participant_count: u32,
+    ) {
+        let summary = ArchivedRoundSummary {
+            round_id: round.round_id,
+            price_start: round.price_start,
+            price_final: final_price,
+            mode: round.mode.clone(),
+            status,
+            pool_up: round.pool_up,
+            pool_down: round.pool_down,
+            participant_count,
+            settled_at_ledger: env.ledger().sequence(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::ArchivedRound(round.round_id), &summary);
+
+        let mut recent: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RecentArchivedRoundIds)
+            .unwrap_or(Vec::new(env));
+
+        recent.push_back(round.round_id);
+
+        while recent.len() > MAX_ARCHIVED_ROUNDS {
+            if let Some(oldest) = recent.get(0) {
+                env.storage()
+                    .persistent()
+                    .remove(&DataKey::ArchivedRound(oldest));
+            }
+            let mut trimmed = Vec::new(env);
+            for i in 1..recent.len() {
+                if let Some(id) = recent.get(i) {
+                    trimmed.push_back(id);
+                }
+            }
+            recent = trimmed;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::RecentArchivedRoundIds, &recent);
     }
 
     /// Refunds all participant stakes when the minimum-participants threshold is not met.
@@ -2236,6 +2385,170 @@ impl VirtualTokenContract {
         }
 
         env.storage().persistent().set(&key, &new_pending);
+        Ok(())
+    }
+
+    fn _validate_windows(bet_ledgers: u32, run_ledgers: u32) -> Result<(), ContractError> {
+        if bet_ledgers == 0 || run_ledgers == 0 {
+            return Err(ContractError::InvalidDuration);
+        }
+        if bet_ledgers > MAX_BET_WINDOW_LEDGERS || run_ledgers > MAX_RUN_WINDOW_LEDGERS {
+            return Err(ContractError::WindowOutOfRange);
+        }
+        if bet_ledgers >= run_ledgers {
+            return Err(ContractError::InvalidDuration);
+        }
+        Ok(())
+    }
+
+    fn _validate_max_stake(max_amount: Option<i128>) -> Result<(), ContractError> {
+        if let Some(v) = max_amount {
+            if v < MIN_CAP_VALUE {
+                return Err(ContractError::InvalidBetAmount);
+            }
+        }
+        Ok(())
+    }
+
+    fn _validate_oracle_stale_threshold(seconds: u64) -> Result<(), ContractError> {
+        if !(MIN_ORACLE_STALE_THRESHOLD..=MAX_ORACLE_STALE_THRESHOLD).contains(&seconds) {
+            return Err(ContractError::InvalidStaleThreshold);
+        }
+        Ok(())
+    }
+
+    fn _validate_oracle_max_deviation_bps(bps: Option<u32>) -> Result<(), ContractError> {
+        if let Some(v) = bps {
+            if v == 0 || v > MAX_ORACLE_DEVIATION_BPS {
+                return Err(ContractError::InvalidOracleDeviationBps);
+            }
+        }
+        Ok(())
+    }
+
+    fn _schedule_config_change(
+        env: &Env,
+        kind: ConfigChangeKind,
+        payload: ConfigChangePayload,
+    ) -> Result<(), ContractError> {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::AdminNotSet)?;
+        admin.require_auth();
+        Self::_ensure_not_paused(env)?;
+
+        let key = DataKey::PendingConfigChange(kind.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(ContractError::RoundAlreadyActive);
+        }
+
+        let scheduled_at_ledger = env.ledger().sequence();
+        let activation_ledger = scheduled_at_ledger
+            .checked_add(CONFIG_TIMELOCK_LEDGERS)
+            .ok_or(ContractError::Overflow)?;
+
+        let pending = PendingConfigChange {
+            payload,
+            activation_ledger,
+            scheduled_at_ledger,
+        };
+        env.storage().persistent().set(&key, &pending);
+
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("config"), symbol_short!("scheduled")),
+            (kind, activation_ledger),
+        );
+
+        Ok(())
+    }
+
+    fn _apply_config_payload(
+        env: &Env,
+        kind: &ConfigChangeKind,
+        payload: &ConfigChangePayload,
+    ) -> Result<(), ContractError> {
+        match (kind, payload) {
+            (ConfigChangeKind::Windows, ConfigChangePayload::Windows(bet, run)) => {
+                Self::_validate_windows(*bet, *run)?;
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::BetWindowLedgers, bet);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::RunWindowLedgers, run);
+                #[allow(deprecated)]
+                env.events().publish(
+                    (symbol_short!("windows"), symbol_short!("updated")),
+                    (*bet, *run),
+                );
+            }
+            (ConfigChangeKind::MaxStake, ConfigChangePayload::MaxStake(max)) => {
+                Self::_validate_max_stake(*max)?;
+                if let Some(v) = max {
+                    env.storage().persistent().set(&DataKey::MaxStake, v);
+                } else {
+                    env.storage().persistent().remove(&DataKey::MaxStake);
+                }
+            }
+            (
+                ConfigChangeKind::MaxUserRoundExposure,
+                ConfigChangePayload::MaxUserRoundExposure(max),
+            ) => {
+                Self::_validate_max_stake(*max)?;
+                if let Some(v) = max {
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::MaxUserRoundExposure, v);
+                } else {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::MaxUserRoundExposure);
+                }
+            }
+            (
+                ConfigChangeKind::MaxPendingWinnings,
+                ConfigChangePayload::MaxPendingWinnings(max),
+            ) => {
+                Self::_validate_max_stake(*max)?;
+                if let Some(v) = max {
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::MaxPendingWinnings, v);
+                } else {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::MaxPendingWinnings);
+                }
+            }
+            (
+                ConfigChangeKind::OracleStaleThreshold,
+                ConfigChangePayload::OracleStaleThreshold(seconds),
+            ) => {
+                Self::_validate_oracle_stale_threshold(*seconds)?;
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::OracleStaleThreshold, seconds);
+            }
+            (
+                ConfigChangeKind::OracleMaxDeviationBps,
+                ConfigChangePayload::OracleMaxDeviationBps(bps),
+            ) => {
+                Self::_validate_oracle_max_deviation_bps(*bps)?;
+                if let Some(v) = bps {
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::OracleMaxDeviationBps, v);
+                } else {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::OracleMaxDeviationBps);
+                }
+            }
+            _ => return Err(ContractError::InvalidMode),
+        }
         Ok(())
     }
 

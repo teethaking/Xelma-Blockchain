@@ -1,5 +1,6 @@
 //! Event coverage and completeness verification tests (Issue #117).
 
+use super::config_helpers::apply_windows;
 use crate::contract::{VirtualTokenContract, VirtualTokenContractClient};
 use crate::types::{BetSide, OraclePayload};
 use soroban_sdk::xdr::ToXdr;
@@ -72,11 +73,16 @@ fn test_event_coverage_create_round() {
 fn test_event_coverage_set_windows() {
     let (env, _, _, client) = setup();
 
-    client.set_windows(&10, &20);
+    apply_windows(&env, &client, 10, 20);
 
     let events = env.events().all();
-    let last_event = events.last().unwrap();
-    let (_contract, topics, data) = last_event;
+    let windows_event = events.iter().rev().find(|e| {
+        let (_contract, topics, _data) = e;
+        topics.len() == 2
+            && topics.get(0).unwrap().try_into_val(&env) == Ok(symbol_short!("windows"))
+            && topics.get(1).unwrap().try_into_val(&env) == Ok(symbol_short!("updated"))
+    });
+    let (_contract, topics, data) = windows_event.expect("windows updated event should exist");
 
     assert_eq!(topics.len(), 2);
     assert_eq!(

@@ -1,5 +1,6 @@
 //! Tests for round mode flag and separate prediction storage.
 
+use super::config_helpers::{apply_max_stake, apply_max_user_exposure, apply_windows};
 use crate::contract::{VirtualTokenContract, VirtualTokenContractClient};
 use crate::errors::ContractError;
 use crate::types::{BetSide, OraclePayload, RoundMode};
@@ -782,7 +783,7 @@ fn test_windows_update_event() {
     client.initialize(&admin, &oracle);
 
     // Update windows - should emit windows updated event
-    client.set_windows(&10, &30);
+    apply_windows(&env, &client, 10, 30);
 
     let windows_events = env
         .events()
@@ -813,7 +814,7 @@ fn test_precision_prediction_exceeds_max_stake_fails() {
     env.mock_all_auths();
     client.initialize(&admin, &oracle);
     client.mint_initial(&user);
-    client.set_max_stake(&Some(50_0000000i128));
+    apply_max_stake(&env, &client, Some(50_0000000i128));
     client.create_round(&1_0000000, &Some(1));
 
     let result = client.try_place_precision_prediction(&user, &100_0000000, &2297u128);
@@ -833,7 +834,7 @@ fn test_precision_prediction_at_max_stake_boundary_succeeds() {
     env.mock_all_auths();
     client.initialize(&admin, &oracle);
     client.mint_initial(&user);
-    client.set_max_stake(&Some(100_0000000i128));
+    apply_max_stake(&env, &client, Some(100_0000000i128));
     client.create_round(&1_0000000, &Some(1));
 
     // Exactly at cap — must succeed
@@ -854,7 +855,7 @@ fn test_precision_prediction_exposure_cap_exceeded_fails() {
     env.mock_all_auths();
     client.initialize(&admin, &oracle);
     client.mint_initial(&user);
-    client.set_max_user_exposure(&Some(75_0000000i128));
+    apply_max_user_exposure(&env, &client, Some(75_0000000i128));
     client.create_round(&1_0000000, &Some(1));
 
     let result = client.try_place_precision_prediction(&user, &80_0000000, &2297u128);
@@ -882,10 +883,6 @@ fn test_caps_disabled_precision_prediction_succeeds() {
 
 #[test]
 fn test_default_precision_participant_cap_allows_predictions_below_cap() {
-fn test_precision_commit_reveal_happy_path() {
-    use soroban_sdk::xdr::ToXdr;
-    use soroban_sdk::{Bytes, BytesN};
-
     let env = Env::default();
     let contract_id = env.register(VirtualTokenContract, ());
     let client = VirtualTokenContractClient::new(&env, &contract_id);
@@ -908,6 +905,77 @@ fn test_precision_commit_reveal_happy_path() {
 
 #[test]
 fn test_custom_precision_participant_cap_boundary_and_over_cap() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let user1 = Address::generate(&env);
+    let user2 = Address::generate(&env);
+    let user3 = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+    client.set_max_precision_participants(&2u32);
+    client.mint_initial(&user1);
+    client.mint_initial(&user2);
+    client.mint_initial(&user3);
+    client.create_round(&1_0000000, &Some(1));
+
+    client.place_precision_prediction(&user1, &100_0000000, &2297u128);
+    client.place_precision_prediction(&user2, &100_0000000, &2298u128);
+
+    let result = client.try_place_precision_prediction(&user3, &100_0000000, &2299u128);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::PrecisionParticipantCapExceeded))
+    );
+    assert_eq!(client.balance(&user3), 1000_0000000);
+    assert!(client.get_user_precision_prediction(&user3).is_none());
+}
+
+#[test]
+fn test_set_max_precision_participants_validation() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+
+    let zero = client.try_set_max_precision_participants(&0u32);
+    assert_eq!(zero, Err(Ok(ContractError::InvalidPrecisionParticipantCap)));
+
+    let too_high = client.try_set_max_precision_participants(&10_001u32);
+    assert_eq!(
+        too_high,
+        Err(Ok(ContractError::InvalidPrecisionParticipantCap))
+    );
+
+    client.set_max_precision_participants(&3u32);
+    assert_eq!(client.get_max_precision_participants(), 3u32);
+}
+
+#[test]
+fn test_precision_commit_reveal_happy_path() {
+    use soroban_sdk::xdr::ToXdr;
+    use soroban_sdk::{Bytes, BytesN};
+
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+    client.mint_initial(&user);
     client.create_round(&1_0000000, &Some(1)); // Precision mode
 
     let price = 2297u128;
@@ -947,32 +1015,6 @@ fn test_precision_commit_reveal_already_revealed() {
 
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
-    let user1 = Address::generate(&env);
-    let user2 = Address::generate(&env);
-    let user3 = Address::generate(&env);
-
-    env.mock_all_auths();
-    client.initialize(&admin, &oracle);
-    client.set_max_precision_participants(&2u32);
-    client.mint_initial(&user1);
-    client.mint_initial(&user2);
-    client.mint_initial(&user3);
-    client.create_round(&1_0000000, &Some(1));
-
-    client.place_precision_prediction(&user1, &100_0000000, &2297u128);
-    client.place_precision_prediction(&user2, &100_0000000, &2298u128);
-
-    let result = client.try_place_precision_prediction(&user3, &100_0000000, &2299u128);
-    assert_eq!(
-        result,
-        Err(Ok(ContractError::PrecisionParticipantCapExceeded))
-    );
-    assert_eq!(client.balance(&user3), 1000_0000000);
-    assert!(client.get_user_precision_prediction(&user3).is_none());
-}
-
-#[test]
-fn test_set_max_precision_participants_validation() {
     let user = Address::generate(&env);
 
     env.mock_all_auths();
@@ -1012,21 +1054,6 @@ fn test_precision_commit_reveal_hash_mismatch() {
 
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
-
-    env.mock_all_auths();
-    client.initialize(&admin, &oracle);
-
-    let zero = client.try_set_max_precision_participants(&0u32);
-    assert_eq!(zero, Err(Ok(ContractError::InvalidPrecisionParticipantCap)));
-
-    let too_high = client.try_set_max_precision_participants(&10_001u32);
-    assert_eq!(
-        too_high,
-        Err(Ok(ContractError::InvalidPrecisionParticipantCap))
-    );
-
-    client.set_max_precision_participants(&3u32);
-    assert_eq!(client.get_max_precision_participants(), 3u32);
     let user = Address::generate(&env);
 
     env.mock_all_auths();

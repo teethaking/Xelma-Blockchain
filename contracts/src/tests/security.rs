@@ -1,5 +1,6 @@
 //! Security tests for Oracle data freshness and round validation.
 
+use super::config_helpers::{apply_oracle_max_deviation_bps, apply_oracle_stale_threshold};
 use crate::contract::{VirtualTokenContract, VirtualTokenContractClient};
 use crate::errors::ContractError;
 use crate::types::{DataKey, OraclePayload};
@@ -509,7 +510,7 @@ fn test_set_oracle_stale_threshold_validation() {
     assert_eq!(result, Err(Ok(ContractError::InvalidStaleThreshold)));
 
     // Valid value
-    client.set_oracle_stale_threshold(&1800u64);
+    apply_oracle_stale_threshold(&env, &client, 1800u64);
     assert_eq!(client.get_oracle_stale_threshold(), 1800u64);
 }
 
@@ -530,7 +531,7 @@ fn test_oracle_deviation_rejected_when_over_threshold() {
     let round = client.get_active_round().unwrap();
 
     // Set max deviation to 5% (500 bp)
-    client.set_oracle_max_deviation_bps(&Some(500u32));
+    apply_oracle_max_deviation_bps(&env, &client, Some(500u32));
 
     env.ledger().with_mut(|li| {
         li.sequence_number = 12;
@@ -562,7 +563,7 @@ fn test_oracle_deviation_allows_at_exact_threshold() {
     let round = client.get_active_round().unwrap();
 
     // 5% (500 bp)
-    client.set_oracle_max_deviation_bps(&Some(500u32));
+    apply_oracle_max_deviation_bps(&env, &client, Some(500u32));
 
     env.ledger().with_mut(|li| {
         li.sequence_number = 12;
@@ -594,7 +595,7 @@ fn test_oracle_deviation_rounding_floor_is_deterministic() {
     client.create_round(&3u128, &None);
     let round = client.get_active_round().unwrap();
 
-    client.set_oracle_max_deviation_bps(&Some(3333u32));
+    apply_oracle_max_deviation_bps(&env, &client, Some(3333u32));
 
     env.ledger().with_mut(|li| {
         li.sequence_number = 12;
@@ -625,7 +626,7 @@ fn test_oracle_deviation_override_allows_over_threshold_and_emits_event() {
     client.create_round(&1_0000000u128, &None);
     let round = client.get_active_round().unwrap();
 
-    client.set_oracle_max_deviation_bps(&Some(500u32)); // 5%
+    apply_oracle_max_deviation_bps(&env, &client, Some(500u32)); // 5%
     client.arm_oracle_deviation_override();
 
     env.ledger().with_mut(|li| {
@@ -640,6 +641,16 @@ fn test_oracle_deviation_override_allows_over_threshold_and_emits_event() {
         nonce: 1u64,
     });
 
+    // Capture events before `as_contract` — that helper clears the event buffer.
+    let events = env.events().all();
+    let override_event = events.iter().find(|e| {
+        let (_contract, topics, _data) = e;
+        topics.len() == 2
+            && topics.get(0).unwrap().try_into_val(&env) == Ok(symbol_short!("oracle"))
+            && topics.get(1).unwrap().try_into_val(&env) == Ok(symbol_short!("override"))
+    });
+    assert!(override_event.is_some(), "override event must be emitted");
+
     // Override is one-shot and must be cleared
     env.as_contract(&contract_id, || {
         let armed: bool = env
@@ -649,16 +660,6 @@ fn test_oracle_deviation_override_allows_over_threshold_and_emits_event() {
             .unwrap_or(false);
         assert!(!armed, "override must be cleared after use");
     });
-
-    // Verify override event emitted
-    let events = env.events().all();
-    let override_event = events.iter().find(|e| {
-        let (_contract, topics, _data) = e;
-        topics.len() == 2
-            && topics.get(0).unwrap().try_into_val(&env) == Ok(symbol_short!("oracle"))
-            && topics.get(1).unwrap().try_into_val(&env) == Ok(symbol_short!("override"))
-    });
-    assert!(override_event.is_some(), "override event must be emitted");
 }
 
 #[test]
@@ -673,7 +674,7 @@ fn test_oracle_liveness_custom_threshold() {
     client.initialize(&admin, &oracle);
 
     // Set a short 120 s threshold
-    client.set_oracle_stale_threshold(&120u64);
+    apply_oracle_stale_threshold(&env, &client, 120u64);
 
     env.ledger().with_mut(|li| {
         li.timestamp = 0;
