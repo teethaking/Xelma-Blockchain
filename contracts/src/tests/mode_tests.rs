@@ -903,6 +903,63 @@ fn test_default_precision_participant_cap_allows_predictions_below_cap() {
 }
 
 #[test]
+fn test_custom_precision_participant_cap_boundary_and_over_cap() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let user1 = Address::generate(&env);
+    let user2 = Address::generate(&env);
+    let user3 = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+    client.set_max_precision_participants(&2u32);
+    client.mint_initial(&user1);
+    client.mint_initial(&user2);
+    client.mint_initial(&user3);
+    client.create_round(&1_0000000, &Some(1));
+
+    client.place_precision_prediction(&user1, &100_0000000, &2297u128);
+    client.place_precision_prediction(&user2, &100_0000000, &2298u128);
+
+    let result = client.try_place_precision_prediction(&user3, &100_0000000, &2299u128);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::PrecisionParticipantCapExceeded))
+    );
+    assert_eq!(client.balance(&user3), 1000_0000000);
+    assert!(client.get_user_precision_prediction(&user3).is_none());
+}
+
+#[test]
+fn test_set_max_precision_participants_validation() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+
+    let zero = client.try_set_max_precision_participants(&0u32);
+    assert_eq!(zero, Err(Ok(ContractError::InvalidPrecisionParticipantCap)));
+
+    let too_high = client.try_set_max_precision_participants(&10_001u32);
+    assert_eq!(
+        too_high,
+        Err(Ok(ContractError::InvalidPrecisionParticipantCap))
+    );
+
+    client.set_max_precision_participants(&3u32);
+    assert_eq!(client.get_max_precision_participants(), 3u32);
+}
+
+#[test]
 fn test_precision_commit_reveal_happy_path() {
     use soroban_sdk::xdr::ToXdr;
     use soroban_sdk::{Bytes, BytesN};
@@ -947,38 +1004,6 @@ fn test_precision_commit_reveal_happy_path() {
 }
 
 #[test]
-fn test_custom_precision_participant_cap_boundary_and_over_cap() {
-    let env = Env::default();
-    let contract_id = env.register(VirtualTokenContract, ());
-    let client = VirtualTokenContractClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let oracle = Address::generate(&env);
-    let user1 = Address::generate(&env);
-    let user2 = Address::generate(&env);
-    let user3 = Address::generate(&env);
-
-    env.mock_all_auths();
-    client.initialize(&admin, &oracle);
-    client.set_max_precision_participants(&2u32);
-    client.mint_initial(&user1);
-    client.mint_initial(&user2);
-    client.mint_initial(&user3);
-    client.create_round(&1_0000000, &Some(1));
-
-    client.place_precision_prediction(&user1, &100_0000000, &2297u128);
-    client.place_precision_prediction(&user2, &100_0000000, &2298u128);
-
-    let result = client.try_place_precision_prediction(&user3, &100_0000000, &2299u128);
-    assert_eq!(
-        result,
-        Err(Ok(ContractError::PrecisionParticipantCapExceeded))
-    );
-    assert_eq!(client.balance(&user3), 1000_0000000);
-    assert!(client.get_user_precision_prediction(&user3).is_none());
-}
-
-#[test]
 fn test_precision_commit_reveal_already_revealed() {
     use soroban_sdk::xdr::ToXdr;
     use soroban_sdk::{Bytes, BytesN};
@@ -1015,31 +1040,6 @@ fn test_precision_commit_reveal_already_revealed() {
     // Second reveal should fail
     let result = client.try_reveal_prediction(&user, &price, &salt);
     assert_eq!(result, Err(Ok(ContractError::AlreadyRevealed)));
-}
-
-#[test]
-fn test_set_max_precision_participants_validation() {
-    let env = Env::default();
-    let contract_id = env.register(VirtualTokenContract, ());
-    let client = VirtualTokenContractClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let oracle = Address::generate(&env);
-
-    env.mock_all_auths();
-    client.initialize(&admin, &oracle);
-
-    let zero = client.try_set_max_precision_participants(&0u32);
-    assert_eq!(zero, Err(Ok(ContractError::InvalidPrecisionParticipantCap)));
-
-    let too_high = client.try_set_max_precision_participants(&10_001u32);
-    assert_eq!(
-        too_high,
-        Err(Ok(ContractError::InvalidPrecisionParticipantCap))
-    );
-
-    client.set_max_precision_participants(&3u32);
-    assert_eq!(client.get_max_precision_participants(), 3u32);
 }
 
 #[test]

@@ -20,5 +20,6 @@ mod tests;
 pub use contract::VirtualTokenContract;
 pub use errors::ContractError;
 pub use types::{
-    BetSide, DataKey, PrecisionCommitment, PrecisionPrediction, Round, UserPosition, UserStats,
+    ArchivedRoundSummary, BetSide, DataKey, PrecisionCommitment, PrecisionPrediction, Round,
+    RoundArchiveStatus, UserPosition, UserStats,
 };

@@ -7,8 +7,9 @@ use soroban_sdk::{
 
 use crate::errors::ContractError;
 use crate::types::{
-    BetSide, DataKey, OracleHeartbeatRecord, OraclePayload, PrecisionCommitment,
-    PrecisionPrediction, Round, RoundMode, UserPosition, UserStats,
+    ArchivedRoundSummary, BetSide, DataKey, OracleHeartbeatRecord, OraclePayload,
+    PrecisionCommitment, PrecisionPrediction, Round, RoundArchiveStatus, RoundMode, UserPosition,
+    UserStats,
 };
 
 // ─── Economic control limits ─────────────────────────────────────────────────
@@ -41,12 +42,14 @@ const CURRENT_SCHEMA_VERSION: u32 = 2;
 const MIN_START_PRICE: u128 = 1;
 /// Maximum start price in protocol units — guards against overflow in payout math.
 const MAX_START_PRICE: u128 = 1_000_000_000_000_000_000;
-
 // ─── Storage TTL Lifecycle Limits (Issue #142) ──────────────────────────────
 /// Minimum remaining ledgers before a persistent entry is extended.
 const TTL_BUMP_THRESHOLD: u32 = 17_280; // ~1 day at 5-second ledgers
 /// Amount of ledgers to extend a persistent entry to when below threshold.
 const TTL_BUMP_AMOUNT: u32 = 518_400; // ~30 days at 5-second ledgers
+
+/// Maximum archived round summaries retained on-chain (FIFO pruning).
+const MAX_ARCHIVED_ROUNDS: u32 = 128;
 
 #[contract]
 pub struct VirtualTokenContract;
@@ -306,6 +309,55 @@ impl VirtualTokenContract {
             .unwrap_or(0)
     }
 
+    /// Returns a compact archived round summary by round id, if retained.
+    pub fn get_archived_round(env: Env, round_id: u64) -> Option<ArchivedRoundSummary> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ArchivedRound(round_id))
+    }
+
+    /// Returns up to `limit` most recently archived rounds (newest first).
+    ///
+    /// Pass `limit = 0` to receive an empty list. Values above [`MAX_ARCHIVED_ROUNDS`]
+    /// are capped automatically.
+    pub fn get_recent_archived_rounds(env: Env, limit: u32) -> Vec<ArchivedRoundSummary> {
+        let env_ref = &env;
+        let recent: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RecentArchivedRoundIds)
+            .unwrap_or(Vec::new(env_ref));
+
+        let mut result = Vec::new(env_ref);
+        if limit == 0 || recent.is_empty() {
+            return result;
+        }
+
+        let fetch_cap = if limit > MAX_ARCHIVED_ROUNDS {
+            MAX_ARCHIVED_ROUNDS
+        } else {
+            limit
+        };
+
+        let mut fetched: u32 = 0;
+        let mut idx = recent.len();
+        while idx > 0 && fetched < fetch_cap {
+            idx -= 1;
+            if let Some(round_id) = recent.get(idx) {
+                if let Some(summary) = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::ArchivedRound(round_id))
+                {
+                    result.push_back(summary);
+                    fetched += 1;
+                }
+            }
+        }
+
+        result
+    }
+
     pub fn get_admin(env: Env) -> Option<Address> {
         let key = DataKey::Admin;
         Self::_extend_persistent_ttl(&env, &key);
@@ -459,7 +511,7 @@ impl VirtualTokenContract {
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
 
-        if seconds < MIN_ORACLE_STALE_THRESHOLD || seconds > MAX_ORACLE_STALE_THRESHOLD {
+        if !(MIN_ORACLE_STALE_THRESHOLD..=MAX_ORACLE_STALE_THRESHOLD).contains(&seconds) {
             return Err(ContractError::InvalidStaleThreshold);
         }
         let key = DataKey::OracleStaleThreshold;
@@ -1463,8 +1515,15 @@ impl VirtualTokenContract {
                 .persistent()
                 .get(&DataKey::RoundParticipants(round_id))
                 .unwrap_or(Vec::new(&env));
-            let count = threshold_participants.len() as u32;
+            let count = threshold_participants.len();
             if count < min {
+                Self::_archive_round(
+                    &env,
+                    &round,
+                    RoundArchiveStatus::FallbackRefund,
+                    payload.price,
+                    count,
+                );
                 Self::_refund_under_threshold(&env, &round, &threshold_participants)?;
                 #[allow(deprecated)]
                 env.events().publish(
@@ -1499,6 +1558,16 @@ impl VirtualTokenContract {
             .persistent()
             .get(&DataKey::RoundParticipants(round_id))
             .unwrap_or(Vec::new(&env));
+        let participant_count = participants.len();
+
+        Self::_archive_round(
+            &env,
+            &round,
+            RoundArchiveStatus::Resolved,
+            payload.price,
+            participant_count,
+        );
+
         for i in 0..participants.len() {
             if let Some(user) = participants.get(i) {
                 env.storage()
@@ -1980,6 +2049,15 @@ impl VirtualTokenContract {
         }
 
         // Clean up participant list and mark round as cancelled
+        let participant_count = participants.len();
+        Self::_archive_round(
+            &env,
+            &round,
+            RoundArchiveStatus::Cancelled,
+            0,
+            participant_count,
+        );
+
         env.storage()
             .persistent()
             .remove(&DataKey::RoundParticipants(round_id));
@@ -2097,6 +2175,58 @@ impl VirtualTokenContract {
         }
 
         Ok(())
+    }
+
+    /// Persists a compact round summary and enforces FIFO archive retention.
+    fn _archive_round(
+        env: &Env,
+        round: &Round,
+        status: RoundArchiveStatus,
+        final_price: u128,
+        participant_count: u32,
+    ) {
+        let summary = ArchivedRoundSummary {
+            round_id: round.round_id,
+            price_start: round.price_start,
+            price_final: final_price,
+            mode: round.mode.clone(),
+            status,
+            pool_up: round.pool_up,
+            pool_down: round.pool_down,
+            participant_count,
+            settled_at_ledger: env.ledger().sequence(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::ArchivedRound(round.round_id), &summary);
+
+        let mut recent: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RecentArchivedRoundIds)
+            .unwrap_or(Vec::new(env));
+
+        recent.push_back(round.round_id);
+
+        while recent.len() > MAX_ARCHIVED_ROUNDS {
+            if let Some(oldest) = recent.get(0) {
+                env.storage()
+                    .persistent()
+                    .remove(&DataKey::ArchivedRound(oldest));
+            }
+            let mut trimmed = Vec::new(env);
+            for i in 1..recent.len() {
+                if let Some(id) = recent.get(i) {
+                    trimmed.push_back(id);
+                }
+            }
+            recent = trimmed;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::RecentArchivedRoundIds, &recent);
     }
 
     /// Refunds all participant stakes when the minimum-participants threshold is not met.

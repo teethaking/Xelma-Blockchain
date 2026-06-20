@@ -20,11 +20,9 @@ const bindingsCode = fs.readFileSync(bindingsPath, 'utf8');
 const contractFns = [];
 const contractSegments = contractCode.split('impl VirtualTokenContract');
 if (contractSegments.length > 1) {
-    // Use everything after `impl VirtualTokenContract` up to the closing brace? Just parse the rest of the file
     const implBlock = contractSegments[1];
     const lines = implBlock.split('\n');
     for (const line of lines) {
-        // looking for things like: `pub fn create_round(`
         const match = line.match(/^\s*pub\s+fn\s+([a-zA-Z0-9_]+)\s*\(/);
         const isPubCrate = line.match(/^\s*pub\(crate\)\s+fn/);
         if (match && !isPubCrate) {

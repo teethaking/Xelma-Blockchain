@@ -79,10 +79,10 @@ pub enum ContractError {
     InvalidMinParticipants = 35,
     /// Oracle heartbeat status is out of range (must be 0, 1, or 2)
     InvalidOracleStatus = 36,
-    /// Precision participant cap is out of range (must be 1–10000)
-    InvalidPrecisionParticipantCap = 37,
     /// Oracle stale threshold is out of valid range (must be 60–86400 seconds)
-    InvalidStaleThreshold = 38,
+    InvalidStaleThreshold = 37,
+    /// Precision participant cap is out of range (must be 1–10000)
+    InvalidPrecisionParticipantCap = 38,
     /// Precision round has reached the configured participant cap
     PrecisionParticipantCapExceeded = 39,
     /// Oracle max deviation bps is invalid (must be > 0)
