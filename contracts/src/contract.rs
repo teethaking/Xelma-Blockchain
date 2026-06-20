@@ -7,9 +7,9 @@ use soroban_sdk::{
 
 use crate::errors::ContractError;
 use crate::types::{
-    ArchivedRoundSummary, BetSide, ConfigChangeKind, ConfigChangePayload, DataKey,
-    OracleHeartbeatRecord, OraclePayload, PendingConfigChange, PrecisionCommitment,
-    PrecisionPrediction, Round, RoundArchiveStatus, RoundMode, UserPosition, UserStats,
+    ArchivedRoundSummary, BetSide, DataKey, OracleHeartbeatRecord, OraclePayload,
+    PrecisionCommitment, PrecisionPrediction, Round, RoundArchiveStatus, RoundMode, UserPosition,
+    UserStats,
 };
 
 // ─── Economic control limits ─────────────────────────────────────────────────
@@ -45,9 +45,6 @@ const MAX_START_PRICE: u128 = 1_000_000_000_000_000_000;
 
 /// Maximum archived round summaries retained on-chain (FIFO pruning).
 const MAX_ARCHIVED_ROUNDS: u32 = 128;
-
-/// Ledger delay before a scheduled critical config change may be applied (~2 hours at ~5s/ledger).
-const CONFIG_TIMELOCK_LEDGERS: u32 = 1440;
 
 #[contract]
 pub struct VirtualTokenContract;
@@ -437,7 +434,22 @@ impl VirtualTokenContract {
     /// Schedules a timelocked stale threshold update (alias for [`Self::schedule_oracle_stale_threshold`]).
     /// Allowed range: 60–86400 seconds (1 minute to 24 hours).
     pub fn set_oracle_stale_threshold(env: Env, seconds: u64) -> Result<(), ContractError> {
-        Self::schedule_oracle_stale_threshold(env, seconds)
+        Self::_require_supported_schema(&env)?;
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::AdminNotSet)?;
+        admin.require_auth();
+        Self::_ensure_not_paused(&env)?;
+
+        if !(MIN_ORACLE_STALE_THRESHOLD..=MAX_ORACLE_STALE_THRESHOLD).contains(&seconds) {
+            return Err(ContractError::InvalidStaleThreshold);
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleStaleThreshold, &seconds);
+        Ok(())
     }
 
     /// Returns the configured oracle stale threshold, or the default (3600 s) if not set.

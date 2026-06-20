@@ -20,7 +20,6 @@ mod tests;
 pub use contract::VirtualTokenContract;
 pub use errors::ContractError;
 pub use types::{
-    ArchivedRoundSummary, BetSide, ConfigChangeKind, ConfigChangePayload, DataKey,
-    PendingConfigChange, PrecisionCommitment, PrecisionPrediction, Round, RoundArchiveStatus,
-    UserPosition, UserStats,
+    ArchivedRoundSummary, BetSide, DataKey, PrecisionCommitment, PrecisionPrediction, Round,
+    RoundArchiveStatus, UserPosition, UserStats,
 };

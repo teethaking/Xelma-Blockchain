@@ -81,42 +81,6 @@ pub enum DataKey {
     ArchivedRound(u64),
     /// Ordered round ids for archive retention (oldest at index 0).
     RecentArchivedRoundIds,
-    /// Timelocked pending critical config change keyed by change kind.
-    PendingConfigChange(ConfigChangeKind),
-}
-
-/// Identifies which critical risk setting is pending timelocked activation.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-#[repr(u32)]
-pub enum ConfigChangeKind {
-    Windows = 0,
-    MaxStake = 1,
-    MaxUserRoundExposure = 2,
-    MaxPendingWinnings = 3,
-    OracleStaleThreshold = 4,
-    OracleMaxDeviationBps = 5,
-}
-
-/// Payload for a scheduled critical config change.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum ConfigChangePayload {
-    Windows(u32, u32),
-    MaxStake(Option<i128>),
-    MaxUserRoundExposure(Option<i128>),
-    MaxPendingWinnings(Option<i128>),
-    OracleStaleThreshold(u64),
-    OracleMaxDeviationBps(Option<u32>),
-}
-
-/// Pending timelocked config change with activation ledger for on-chain observability.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct PendingConfigChange {
-    pub payload: ConfigChangePayload,
-    pub activation_ledger: u32,
-    pub scheduled_at_ledger: u32,
 }
 
 /// Represents which side a user bet on

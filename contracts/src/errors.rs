@@ -103,8 +103,4 @@ pub enum ContractError {
     PrecisionParticipantCapExceeded = 47,
     /// Precision participant cap is out of range (must be 1–10000)
     InvalidPrecisionParticipantCap = 48,
-    /// No pending timelocked config change exists for the requested kind
-    NoPendingConfigChange = 49,
-    /// Timelock activation ledger has not been reached yet
-    ConfigChangeNotReady = 50,
 }
