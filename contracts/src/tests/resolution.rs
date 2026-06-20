@@ -3,10 +3,11 @@
 use crate::contract::{VirtualTokenContract, VirtualTokenContractClient};
 use crate::errors::ContractError;
 use crate::types::{BetSide, DataKey, OraclePayload, PrecisionPrediction, Round, UserPosition};
+use crate::types::{RoundArchiveStatus, RoundMode};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger as _},
-    Address, Env, Map, TryIntoVal,
+    Address, Env, Map, TryIntoVal, Vec,
 };
 
 #[test]
@@ -1896,4 +1897,247 @@ fn test_precision_remainder_goes_to_lexicographically_lowest_winner() {
     // The other winner (other_user) must get: 100_0000000
     assert_eq!(client.get_pending_winnings(&lowest_user), 100_0000001);
     assert_eq!(client.get_pending_winnings(&other_user), 100_0000000);
+}
+
+fn resolve_active_round(
+    client: &VirtualTokenContractClient,
+    env: &Env,
+    final_price: u128,
+    nonce: u64,
+) -> u64 {
+    let round = client.get_active_round().unwrap();
+    let round_id = round.round_id;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = round.end_ledger;
+    });
+    client.resolve_round(&OraclePayload {
+        price: final_price,
+        timestamp: env.ledger().timestamp(),
+        round_id: round.start_ledger,
+        nonce,
+    });
+    round_id
+}
+
+#[test]
+fn test_archived_round_after_resolve_matches_settlement() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+    client.mint_initial(&alice);
+    client.mint_initial(&bob);
+
+    let start_price: u128 = 1_0000000;
+    client.create_round(&start_price, &None);
+    client.place_bet(&alice, &50_0000000, &BetSide::Up);
+    client.place_bet(&bob, &50_0000000, &BetSide::Down);
+
+    let final_price: u128 = 2_0000000;
+    let round_id = resolve_active_round(&client, &env, final_price, 1);
+
+    assert!(client.get_active_round().is_none());
+    let archived = client
+        .get_archived_round(&round_id)
+        .expect("resolved round must be archived");
+    assert_eq!(archived.round_id, round_id);
+    assert_eq!(archived.price_start, start_price);
+    assert_eq!(archived.price_final, final_price);
+    assert_eq!(archived.mode, RoundMode::UpDown);
+    assert_eq!(archived.status, RoundArchiveStatus::Resolved);
+    assert_eq!(archived.pool_up, 50_0000000);
+    assert_eq!(archived.pool_down, 50_0000000);
+    assert_eq!(archived.participant_count, 2);
+    assert_eq!(archived.settled_at_ledger, 12); // default run window end for round created at ledger 0
+
+    assert_eq!(client.get_pending_winnings(&alice), 100_0000000);
+    assert_eq!(client.get_pending_winnings(&bob), 0);
+}
+
+#[test]
+fn test_archived_round_after_cancel() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+    client.mint_initial(&user);
+
+    let start_price: u128 = 1_5000000;
+    client.create_round(&start_price, &None);
+    client.place_bet(&user, &100_0000000, &BetSide::Up);
+    let round_id = client.get_active_round().unwrap().round_id;
+
+    client.cancel_round(&1u32);
+
+    let archived = client
+        .get_archived_round(&round_id)
+        .expect("cancelled round must be archived");
+    assert_eq!(archived.status, RoundArchiveStatus::Cancelled);
+    assert_eq!(archived.price_final, 0);
+    assert_eq!(archived.participant_count, 1);
+    assert_eq!(archived.pool_up, 100_0000000);
+    assert_eq!(archived.pool_down, 0);
+    assert!(client.is_round_cancelled(&round_id));
+}
+
+#[test]
+fn test_archived_round_after_precision_resolve() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+    client.mint_initial(&alice);
+    client.mint_initial(&bob);
+
+    let start_price: u128 = 2000;
+    client.create_round(&start_price, &Some(1)); // Precision mode
+    client.place_precision_prediction(&alice, &30_0000000, &2296);
+    client.place_precision_prediction(&bob, &70_0000000, &2299);
+
+    let final_price: u128 = 2298;
+    let round_id = resolve_active_round(&client, &env, final_price, 1);
+
+    let archived = client
+        .get_archived_round(&round_id)
+        .expect("precision resolved round must be archived");
+    assert_eq!(archived.round_id, round_id);
+    assert_eq!(archived.price_start, start_price);
+    assert_eq!(archived.price_final, final_price);
+    assert_eq!(archived.mode, RoundMode::Precision);
+    assert_eq!(archived.status, RoundArchiveStatus::Resolved);
+    assert_eq!(archived.participant_count, 2);
+
+    // Bob is closer to final_price (10_6000000), so wins full pot.
+    assert_eq!(client.get_pending_winnings(&alice), 0);
+    assert_eq!(client.get_pending_winnings(&bob), 100_0000000);
+}
+
+#[test]
+fn test_archived_round_fallback_refund() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+    client.set_min_participants(&Some(2u32));
+    client.mint_initial(&user);
+
+    let start_price: u128 = 1_0000000;
+    client.create_round(&start_price, &None);
+    client.place_bet(&user, &100_0000000, &BetSide::Up);
+    let round_id = client.get_active_round().unwrap().round_id;
+
+    let final_price: u128 = 1_2000000;
+    resolve_active_round(&client, &env, final_price, 1);
+
+    let archived = client
+        .get_archived_round(&round_id)
+        .expect("fallback round must be archived");
+    assert_eq!(archived.status, RoundArchiveStatus::FallbackRefund);
+    assert_eq!(archived.price_final, final_price);
+    assert_eq!(archived.participant_count, 1);
+    assert_eq!(client.get_pending_winnings(&user), 100_0000000);
+}
+
+#[test]
+fn test_get_archived_round_missing_returns_none() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    assert!(client.get_archived_round(&999).is_none());
+}
+
+#[test]
+fn test_get_recent_archived_rounds_order_and_limit() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+
+    let mut round_ids = Vec::new(&env);
+    for i in 0..3 {
+        client.create_round(&(1_0000000u128 + i as u128), &None);
+        round_ids.push_back(resolve_active_round(
+            &client,
+            &env,
+            1_1000000u128 + i as u128,
+            i as u64 + 1,
+        ));
+    }
+
+    assert!(client.get_recent_archived_rounds(&0).is_empty());
+
+    let recent = client.get_recent_archived_rounds(&2);
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent.get(0).unwrap().round_id, round_ids.get(2).unwrap());
+    assert_eq!(recent.get(1).unwrap().round_id, round_ids.get(1).unwrap());
+
+    let all = client.get_recent_archived_rounds(&10);
+    assert_eq!(all.len(), 3);
+    assert_eq!(all.get(0).unwrap().round_id, round_ids.get(2).unwrap());
+    assert_eq!(all.get(2).unwrap().round_id, round_ids.get(0).unwrap());
+}
+
+#[test]
+fn test_archive_retention_prunes_oldest() {
+    let env = Env::default();
+    let contract_id = env.register(VirtualTokenContract, ());
+    let client = VirtualTokenContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle);
+
+    // MAX_ARCHIVED_ROUNDS = 128; create 129 resolved rounds to force pruning of round 1.
+    let mut first_round_id = 0u64;
+    for i in 0..129 {
+        client.create_round(&1_0000000u128, &None);
+        let round_id = resolve_active_round(&client, &env, 1_1000000u128, i as u64 + 1);
+        if i == 0 {
+            first_round_id = round_id;
+        }
+    }
+
+    assert!(
+        client.get_archived_round(&first_round_id).is_none(),
+        "oldest archive must be pruned once retention limit is exceeded"
+    );
+    assert!(
+        client.get_archived_round(&129).is_some(),
+        "newest archive must remain queryable"
+    );
+
+    let recent = client.get_recent_archived_rounds(&200);
+    assert_eq!(recent.len(), 128);
 }

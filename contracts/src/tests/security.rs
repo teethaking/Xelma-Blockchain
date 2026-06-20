@@ -640,6 +640,16 @@ fn test_oracle_deviation_override_allows_over_threshold_and_emits_event() {
         nonce: 1u64,
     });
 
+    // Capture events before `as_contract` — that helper clears the event buffer.
+    let events = env.events().all();
+    let override_event = events.iter().find(|e| {
+        let (_contract, topics, _data) = e;
+        topics.len() == 2
+            && topics.get(0).unwrap().try_into_val(&env) == Ok(symbol_short!("oracle"))
+            && topics.get(1).unwrap().try_into_val(&env) == Ok(symbol_short!("override"))
+    });
+    assert!(override_event.is_some(), "override event must be emitted");
+
     // Override is one-shot and must be cleared
     env.as_contract(&contract_id, || {
         let armed: bool = env
@@ -649,16 +659,6 @@ fn test_oracle_deviation_override_allows_over_threshold_and_emits_event() {
             .unwrap_or(false);
         assert!(!armed, "override must be cleared after use");
     });
-
-    // Verify override event emitted
-    let events = env.events().all();
-    let override_event = events.iter().find(|e| {
-        let (_contract, topics, _data) = e;
-        topics.len() == 2
-            && topics.get(0).unwrap().try_into_val(&env) == Ok(symbol_short!("oracle"))
-            && topics.get(1).unwrap().try_into_val(&env) == Ok(symbol_short!("override"))
-    });
-    assert!(override_event.is_some(), "override event must be emitted");
 }
 
 #[test]

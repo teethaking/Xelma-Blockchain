@@ -80,11 +80,6 @@ pub enum ContractError {
     /// Oracle heartbeat status is out of range (must be 0, 1, or 2)
     InvalidOracleStatus = 36,
     /// Oracle stale threshold is out of valid range (must be 60–86400 seconds)
-    InvalidStaleThreshold = 35,
-    /// Precision round has reached the configured participant cap
-    PrecisionParticipantCapExceeded = 36,
-    /// Precision participant cap is out of range (must be 1â€“10000)
-    InvalidPrecisionParticipantCap = 37,
     InvalidStaleThreshold = 37,
     /// Oracle max deviation bps is invalid (must be > 0)
     InvalidOracleDeviationBps = 38,
@@ -104,4 +99,8 @@ pub enum ContractError {
     InvalidRevealWindow = 45,
     /// Revealed prediction hash does not match committed hash
     HashMismatch = 46,
+    /// Precision round has reached the configured participant cap
+    PrecisionParticipantCapExceeded = 47,
+    /// Precision participant cap is out of range (must be 1–10000)
+    InvalidPrecisionParticipantCap = 48,
 }
