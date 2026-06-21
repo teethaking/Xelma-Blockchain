@@ -81,26 +81,26 @@ pub enum ContractError {
     InvalidOracleStatus = 36,
     /// Oracle stale threshold is out of valid range (must be 60–86400 seconds)
     InvalidStaleThreshold = 37,
-    /// Oracle max deviation bps is invalid (must be > 0)
-    InvalidOracleDeviationBps = 38,
-    /// Oracle final price deviates beyond configured threshold
-    OracleDeviationExceeded = 39,
-    /// Stored schema version is unknown or unsupported by this contract build
-    UnsupportedSchemaVersion = 40,
-    /// Migration path is invalid for the stored schema version
-    InvalidMigrationPath = 41,
-    /// Migration cannot run while a round is active
-    MigrationActiveRound = 42,
-    /// Commitment for precision prediction not found
-    CommitmentNotFound = 43,
-    /// Precision prediction has already been revealed
-    AlreadyRevealed = 44,
-    /// Attempted to reveal prediction outside the valid window
-    InvalidRevealWindow = 45,
-    /// Revealed prediction hash does not match committed hash
-    HashMismatch = 46,
-    /// Precision round has reached the configured participant cap
-    PrecisionParticipantCapExceeded = 47,
     /// Precision participant cap is out of range (must be 1–10000)
-    InvalidPrecisionParticipantCap = 48,
+    InvalidPrecisionParticipantCap = 38,
+    /// Precision round has reached the configured participant cap
+    PrecisionParticipantCapExceeded = 39,
+    /// Oracle max deviation bps is invalid (must be > 0)
+    InvalidOracleDeviationBps = 40,
+    /// Oracle final price deviates beyond configured threshold
+    OracleDeviationExceeded = 41,
+    /// Stored schema version is unknown or unsupported by this contract build
+    UnsupportedSchemaVersion = 42,
+    /// Migration path is invalid for the stored schema version
+    InvalidMigrationPath = 43,
+    /// Migration cannot run while a round is active
+    MigrationActiveRound = 44,
+    /// Commitment for precision prediction not found
+    CommitmentNotFound = 45,
+    /// Precision prediction has already been revealed
+    AlreadyRevealed = 46,
+    /// Attempted to reveal prediction outside the valid window
+    InvalidRevealWindow = 47,
+    /// Revealed prediction hash does not match committed hash
+    HashMismatch = 48,
 }

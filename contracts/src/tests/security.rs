@@ -641,6 +641,7 @@ fn test_oracle_deviation_override_allows_over_threshold_and_emits_event() {
     });
 
     // Capture events before `as_contract` — that helper clears the event buffer.
+    // Verify override event emitted
     let events = env.events().all();
     let override_event = events.iter().find(|e| {
         let (_contract, topics, _data) = e;

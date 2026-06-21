@@ -42,6 +42,11 @@ const CURRENT_SCHEMA_VERSION: u32 = 2;
 const MIN_START_PRICE: u128 = 1;
 /// Maximum start price in protocol units — guards against overflow in payout math.
 const MAX_START_PRICE: u128 = 1_000_000_000_000_000_000;
+// ─── Storage TTL Lifecycle Limits (Issue #142) ──────────────────────────────
+/// Minimum remaining ledgers before a persistent entry is extended.
+const TTL_BUMP_THRESHOLD: u32 = 17_280; // ~1 day at 5-second ledgers
+/// Amount of ledgers to extend a persistent entry to when below threshold.
+const TTL_BUMP_AMOUNT: u32 = 518_400; // ~30 days at 5-second ledgers
 
 /// Maximum archived round summaries retained on-chain (FIFO pruning).
 const MAX_ARCHIVED_ROUNDS: u32 = 128;
@@ -78,11 +83,20 @@ impl VirtualTokenContract {
             .persistent()
             .set(&DataKey::RunWindowLedgers, &DEFAULT_RUN_WINDOW_LEDGERS);
 
+        Self::_extend_persistent_ttl(&env, &DataKey::Admin);
+        Self::_extend_persistent_ttl(&env, &DataKey::Oracle);
+        Self::_extend_persistent_ttl(&env, &DataKey::Paused);
+        Self::_extend_persistent_ttl(&env, &DataKey::SchemaVersion);
+        Self::_extend_persistent_ttl(&env, &DataKey::BetWindowLedgers);
+        Self::_extend_persistent_ttl(&env, &DataKey::RunWindowLedgers);
+
         Ok(())
     }
 
     /// Returns the stored schema version. If unset, returns legacy version 1.
     pub fn get_schema_version(env: Env) -> u32 {
+        let key = DataKey::SchemaVersion;
+        Self::_extend_persistent_ttl(&env, &key);
         Self::_schema_version(&env).unwrap_or(1)
     }
 
@@ -92,10 +106,12 @@ impl VirtualTokenContract {
     /// - Must not have an active round (avoids partial state interpretation changes)
     /// - Only supports v1 → v2 in this release
     pub fn migrate_schema_v1_to_v2(env: Env) -> Result<(), ContractError> {
+        let admin_key = DataKey::Admin;
+        Self::_extend_persistent_ttl(&env, &admin_key);
         let admin: Address = env
             .storage()
             .persistent()
-            .get(&DataKey::Admin)
+            .get(&admin_key)
             .ok_or(ContractError::AdminNotSet)?;
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
@@ -109,9 +125,11 @@ impl VirtualTokenContract {
             return Err(ContractError::InvalidMigrationPath);
         }
 
+        let schema_key = DataKey::SchemaVersion;
         env.storage()
             .persistent()
-            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+            .set(&schema_key, &CURRENT_SCHEMA_VERSION);
+        Self::_extend_persistent_ttl(&env, &schema_key);
 
         #[allow(deprecated)]
         env.events().publish(
@@ -124,9 +142,11 @@ impl VirtualTokenContract {
 
     /// Returns whether the contract is currently paused
     pub fn is_paused(env: Env) -> bool {
+        let key = DataKey::Paused;
+        Self::_extend_persistent_ttl(&env, &key);
         env.storage()
             .persistent()
-            .get(&DataKey::Paused)
+            .get(&key)
             .unwrap_or(false)
     }
 
@@ -141,6 +161,7 @@ impl VirtualTokenContract {
 
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Paused, &true);
+        Self::_extend_persistent_ttl(&env, &DataKey::Paused);
 
         Ok(())
     }
@@ -156,6 +177,7 @@ impl VirtualTokenContract {
 
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Paused, &false);
+        Self::_extend_persistent_ttl(&env, &DataKey::Paused);
 
         Ok(())
     }
@@ -200,11 +222,13 @@ impl VirtualTokenContract {
         Self::assert_no_active_round(&env)?;
 
         // Get configured windows (with defaults)
+        Self::_extend_persistent_ttl(&env, &DataKey::BetWindowLedgers);
         let bet_ledgers: u32 = env
             .storage()
             .persistent()
             .get(&DataKey::BetWindowLedgers)
             .unwrap_or(DEFAULT_BET_WINDOW_LEDGERS);
+        Self::_extend_persistent_ttl(&env, &DataKey::RunWindowLedgers);
         let run_ledgers: u32 = env
             .storage()
             .persistent()
@@ -212,6 +236,7 @@ impl VirtualTokenContract {
             .unwrap_or(DEFAULT_RUN_WINDOW_LEDGERS);
 
         // Generate unique round ID
+        Self::_extend_persistent_ttl(&env, &DataKey::LastRoundId);
         let last_round_id: u64 = env
             .storage()
             .persistent()
@@ -223,6 +248,7 @@ impl VirtualTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::LastRoundId, &round_id);
+        Self::_extend_persistent_ttl(&env, &DataKey::LastRoundId);
 
         let start_ledger = env.ledger().sequence();
         let bet_end_ledger = start_ledger
@@ -246,6 +272,7 @@ impl VirtualTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::ActiveRound, &round);
+        Self::_extend_persistent_ttl(&env, &DataKey::ActiveRound);
 
         // Note: individual position keys (DataKey::Position / DataKey::PrecisionPosition)
         // are cleaned up at resolve time; no bulk-map clearing needed here.
@@ -332,11 +359,15 @@ impl VirtualTokenContract {
     }
 
     pub fn get_admin(env: Env) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Admin)
+        let key = DataKey::Admin;
+        Self::_extend_persistent_ttl(&env, &key);
+        env.storage().persistent().get(&key)
     }
 
     pub fn get_oracle(env: Env) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Oracle)
+        let key = DataKey::Oracle;
+        Self::_extend_persistent_ttl(&env, &key);
+        env.storage().persistent().get(&key)
     }
 
     /// Sets the maximum oracle price deviation allowed at settlement (admin only).
@@ -344,50 +375,60 @@ impl VirtualTokenContract {
     /// - `None`: disables deviation guardrails
     /// - `Some(bps)`: enables guardrails with a threshold in basis points (1 bp = 0.01%)
     pub fn set_oracle_max_deviation_bps(env: Env, bps: Option<u32>) -> Result<(), ContractError> {
+        let admin_key = DataKey::Admin;
+        Self::_extend_persistent_ttl(&env, &admin_key);
         let admin: Address = env
             .storage()
             .persistent()
-            .get(&DataKey::Admin)
+            .get(&admin_key)
             .ok_or(ContractError::AdminNotSet)?;
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
 
+        let deviation_key = DataKey::OracleMaxDeviationBps;
         if let Some(v) = bps {
             if v == 0 || v > MAX_ORACLE_DEVIATION_BPS {
                 return Err(ContractError::InvalidOracleDeviationBps);
             }
             env.storage()
                 .persistent()
-                .set(&DataKey::OracleMaxDeviationBps, &v);
+                .set(&deviation_key, &v);
+            Self::_extend_persistent_ttl(&env, &deviation_key);
         } else {
             env.storage()
                 .persistent()
-                .remove(&DataKey::OracleMaxDeviationBps);
+                .remove(&deviation_key);
         }
         Ok(())
     }
 
     /// Returns the configured oracle max deviation bps, if set.
     pub fn get_oracle_max_deviation_bps(env: Env) -> Option<u32> {
+        let key = DataKey::OracleMaxDeviationBps;
+        Self::_extend_persistent_ttl(&env, &key);
         env.storage()
             .persistent()
-            .get(&DataKey::OracleMaxDeviationBps)
+            .get(&key)
     }
 
     /// Arms a one-shot override to bypass deviation checks for the next settlement (admin only).
     /// The flag is automatically cleared after a settlement uses it.
     pub fn arm_oracle_deviation_override(env: Env) -> Result<(), ContractError> {
+        let admin_key = DataKey::Admin;
+        Self::_extend_persistent_ttl(&env, &admin_key);
         let admin: Address = env
             .storage()
             .persistent()
-            .get(&DataKey::Admin)
+            .get(&admin_key)
             .ok_or(ContractError::AdminNotSet)?;
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
 
+        let override_key = DataKey::OracleDeviationOverrideArmed;
         env.storage()
             .persistent()
-            .set(&DataKey::OracleDeviationOverrideArmed, &true);
+            .set(&override_key, &true);
+        Self::_extend_persistent_ttl(&env, &override_key);
         Ok(())
     }
 
@@ -401,6 +442,7 @@ impl VirtualTokenContract {
         if status > 2 {
             return Err(ContractError::InvalidOracleStatus);
         }
+        Self::_extend_persistent_ttl(&env, &DataKey::Oracle);
         let oracle: Address = env
             .storage()
             .persistent()
@@ -416,6 +458,7 @@ impl VirtualTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::OracleHeartbeat, &record);
+        Self::_extend_persistent_ttl(&env, &DataKey::OracleHeartbeat);
 
         #[allow(deprecated)]
         env.events().publish(
@@ -427,24 +470,30 @@ impl VirtualTokenContract {
 
     /// Returns the most recent oracle heartbeat record, if any.
     pub fn get_oracle_heartbeat(env: Env) -> Option<OracleHeartbeatRecord> {
-        env.storage().persistent().get(&DataKey::OracleHeartbeat)
+        let key = DataKey::OracleHeartbeat;
+        Self::_extend_persistent_ttl(&env, &key);
+        env.storage().persistent().get(&key)
     }
 
     /// Returns `true` if the oracle has a non-stale heartbeat with status not offline (2).
     /// Uses the configured stale threshold, defaulting to 3600 seconds.
     pub fn is_oracle_live(env: Env) -> bool {
+        let heartbeat_key = DataKey::OracleHeartbeat;
+        Self::_extend_persistent_ttl(&env, &heartbeat_key);
         let record: OracleHeartbeatRecord =
-            match env.storage().persistent().get(&DataKey::OracleHeartbeat) {
+            match env.storage().persistent().get(&heartbeat_key) {
                 Some(r) => r,
                 None => return false,
             };
         if record.status == 2 {
             return false;
         }
+        let threshold_key = DataKey::OracleStaleThreshold;
+        Self::_extend_persistent_ttl(&env, &threshold_key);
         let threshold: u64 = env
             .storage()
             .persistent()
-            .get(&DataKey::OracleStaleThreshold)
+            .get(&threshold_key)
             .unwrap_or(DEFAULT_ORACLE_STALE_THRESHOLD);
         let current_time = env.ledger().timestamp();
         current_time <= record.timestamp.saturating_add(threshold)
@@ -465,17 +514,21 @@ impl VirtualTokenContract {
         if !(MIN_ORACLE_STALE_THRESHOLD..=MAX_ORACLE_STALE_THRESHOLD).contains(&seconds) {
             return Err(ContractError::InvalidStaleThreshold);
         }
+        let key = DataKey::OracleStaleThreshold;
         env.storage()
             .persistent()
-            .set(&DataKey::OracleStaleThreshold, &seconds);
+            .set(&key, &seconds);
+        Self::_extend_persistent_ttl(&env, &key);
         Ok(())
     }
 
     /// Returns the configured oracle stale threshold, or the default (3600 s) if not set.
     pub fn get_oracle_stale_threshold(env: Env) -> u64 {
+        let key = DataKey::OracleStaleThreshold;
+        Self::_extend_persistent_ttl(&env, &key);
         env.storage()
             .persistent()
-            .get(&DataKey::OracleStaleThreshold)
+            .get(&key)
             .unwrap_or(DEFAULT_ORACLE_STALE_THRESHOLD)
     }
 
@@ -511,9 +564,11 @@ impl VirtualTokenContract {
         env.storage()
             .persistent()
             .set(&DataKey::BetWindowLedgers, &bet_ledgers);
+        Self::_extend_persistent_ttl(&env, &DataKey::BetWindowLedgers);
         env.storage()
             .persistent()
             .set(&DataKey::RunWindowLedgers, &run_ledgers);
+        Self::_extend_persistent_ttl(&env, &DataKey::RunWindowLedgers);
 
         // Emit windows update event
         // Topic: ("windows", "updated")
@@ -541,24 +596,26 @@ impl VirtualTokenContract {
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
 
+        let key = DataKey::MaxStake;
         if let Some(v) = max_amount {
             if v < MIN_CAP_VALUE {
                 return Err(ContractError::InvalidBetAmount);
             }
-            env.storage().persistent().set(&DataKey::MaxStake, &v);
+            env.storage().persistent().set(&key, &v);
+            Self::_extend_persistent_ttl(&env, &key);
         } else {
-            env.storage().persistent().remove(&DataKey::MaxStake);
+            env.storage().persistent().remove(&key);
         }
         Ok(())
     }
 
     /// Returns the current maximum stake cap, if set.
     pub fn get_max_stake(env: Env) -> Option<i128> {
-        env.storage().persistent().get(&DataKey::MaxStake)
+        let key = DataKey::MaxStake;
+        Self::_extend_persistent_ttl(&env, &key);
+        env.storage().persistent().get(&key)
     }
 
-    /// Sets the maximum cumulative exposure a user may have per round (admin only).
-    /// Pass `None` to disable the cap.
     pub fn set_max_user_exposure(
         env: Env,
         max_exposure: Option<i128>,
@@ -572,26 +629,30 @@ impl VirtualTokenContract {
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
 
+        let key = DataKey::MaxUserRoundExposure;
         if let Some(v) = max_exposure {
             if v < MIN_CAP_VALUE {
                 return Err(ContractError::InvalidBetAmount);
             }
             env.storage()
                 .persistent()
-                .set(&DataKey::MaxUserRoundExposure, &v);
+                .set(&key, &v);
+            Self::_extend_persistent_ttl(&env, &key);
         } else {
             env.storage()
                 .persistent()
-                .remove(&DataKey::MaxUserRoundExposure);
+                .remove(&key);
         }
         Ok(())
     }
 
     /// Returns the current per-user round exposure cap, if set.
     pub fn get_max_user_exposure(env: Env) -> Option<i128> {
+        let key = DataKey::MaxUserRoundExposure;
+        Self::_extend_persistent_ttl(&env, &key);
         env.storage()
             .persistent()
-            .get(&DataKey::MaxUserRoundExposure)
+            .get(&key)
     }
 
     // ─── Accounting safety (Issue #120) ─────────────────────────────────────
@@ -611,24 +672,28 @@ impl VirtualTokenContract {
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
 
+        let key = DataKey::MaxPendingWinnings;
         if let Some(v) = max_pending {
             if v < MIN_CAP_VALUE {
                 return Err(ContractError::InvalidBetAmount);
             }
             env.storage()
                 .persistent()
-                .set(&DataKey::MaxPendingWinnings, &v);
+                .set(&key, &v);
+            Self::_extend_persistent_ttl(&env, &key);
         } else {
             env.storage()
                 .persistent()
-                .remove(&DataKey::MaxPendingWinnings);
+                .remove(&key);
         }
         Ok(())
     }
 
     /// Returns the current maximum pending winnings cap, if set.
     pub fn get_max_pending_winnings(env: Env) -> Option<i128> {
-        env.storage().persistent().get(&DataKey::MaxPendingWinnings)
+        let key = DataKey::MaxPendingWinnings;
+        Self::_extend_persistent_ttl(&env, &key);
+        env.storage().persistent().get(&key)
     }
 
     // ─── Minimum participants (competitive settlement integrity) ─────────────
@@ -646,22 +711,26 @@ impl VirtualTokenContract {
         admin.require_auth();
         Self::_ensure_not_paused(&env)?;
 
+        let key = DataKey::MinParticipants;
         if let Some(v) = min {
             if v == 0 || v > MAX_MIN_PARTICIPANTS {
                 return Err(ContractError::InvalidMinParticipants);
             }
             env.storage()
                 .persistent()
-                .set(&DataKey::MinParticipants, &v);
+                .set(&key, &v);
+            Self::_extend_persistent_ttl(&env, &key);
         } else {
-            env.storage().persistent().remove(&DataKey::MinParticipants);
+            env.storage().persistent().remove(&key);
         }
         Ok(())
     }
 
     /// Returns the current minimum participant threshold, if set.
     pub fn get_min_participants(env: Env) -> Option<u32> {
-        env.storage().persistent().get(&DataKey::MinParticipants)
+        let key = DataKey::MinParticipants;
+        Self::_extend_persistent_ttl(&env, &key);
+        env.storage().persistent().get(&key)
     }
 
     /// Sets the maximum participant count for Precision rounds (admin only).
@@ -680,23 +749,28 @@ impl VirtualTokenContract {
             return Err(ContractError::InvalidPrecisionParticipantCap);
         }
 
+        let key = DataKey::MaxPrecisionParticipants;
         env.storage()
             .persistent()
-            .set(&DataKey::MaxPrecisionParticipants, &max);
+            .set(&key, &max);
+        Self::_extend_persistent_ttl(&env, &key);
         Ok(())
     }
 
     /// Returns the configured Precision participant cap, or the default if unset.
     pub fn get_max_precision_participants(env: Env) -> u32 {
+        let key = DataKey::MaxPrecisionParticipants;
+        Self::_extend_persistent_ttl(&env, &key);
         env.storage()
             .persistent()
-            .get(&DataKey::MaxPrecisionParticipants)
+            .get(&key)
             .unwrap_or(DEFAULT_MAX_PRECISION_PARTICIPANTS)
     }
 
     /// Returns user statistics (wins, losses, streaks)
     pub fn get_user_stats(env: Env, user: Address) -> UserStats {
         let key = DataKey::UserStats(user);
+        Self::_extend_persistent_ttl(&env, &key);
         env.storage().persistent().get(&key).unwrap_or(UserStats {
             total_wins: 0,
             total_losses: 0,
@@ -708,6 +782,7 @@ impl VirtualTokenContract {
     /// Returns user's claimable winnings
     pub fn get_pending_winnings(env: Env, user: Address) -> i128 {
         let key = DataKey::PendingWinnings(user);
+        Self::_extend_persistent_ttl(&env, &key);
         env.storage().persistent().get(&key).unwrap_or(0)
     }
 
@@ -1301,6 +1376,7 @@ impl VirtualTokenContract {
             return Err(ContractError::InvalidPrice);
         }
 
+        Self::_extend_persistent_ttl(&env, &DataKey::Oracle);
         let oracle: Address = env
             .storage()
             .persistent()
@@ -1336,6 +1412,7 @@ impl VirtualTokenContract {
         // ─── Oracle deviation guardrails (circuit-breaker) ───────────────────
         // Compare settlement price against round start price (trusted baseline).
         // If configured, reject large jumps unless an admin-armed one-shot override is set.
+        Self::_extend_persistent_ttl(&env, &DataKey::OracleMaxDeviationBps);
         if let Some(max_bps) = env
             .storage()
             .persistent()
@@ -2233,6 +2310,7 @@ impl VirtualTokenContract {
         }
 
         env.storage().persistent().set(&key, &stats);
+        Self::_extend_persistent_ttl(env, &key);
         Ok(())
     }
 
@@ -2252,12 +2330,16 @@ impl VirtualTokenContract {
         stats.current_streak = 0;
 
         env.storage().persistent().set(&key, &stats);
+        Self::_extend_persistent_ttl(env, &key);
         Ok(())
     }
 
     /// Mints 1000 vXLM for new users (one-time only)
     pub fn mint_initial(env: Env, user: Address) -> i128 {
         user.require_auth();
+        if let Err(e) = Self::_require_supported_schema(&env) {
+            panic_with_error!(&env, e);
+        }
         if Self::is_paused(env.clone()) {
             panic_with_error!(&env, ContractError::ContractPaused);
         }
@@ -2265,11 +2347,13 @@ impl VirtualTokenContract {
         let key = DataKey::Balance(user.clone());
 
         if let Some(existing_balance) = env.storage().persistent().get(&key) {
+            Self::_extend_persistent_ttl(&env, &key);
             return existing_balance;
         }
 
         let initial_amount: i128 = 1000_0000000;
         env.storage().persistent().set(&key, &initial_amount);
+        Self::_extend_persistent_ttl(&env, &key);
 
         // Emit mint event
         // Topic: ("mint", "initial")
@@ -2286,15 +2370,18 @@ impl VirtualTokenContract {
     /// Returns user's vXLM balance
     pub fn balance(env: Env, user: Address) -> i128 {
         let key = DataKey::Balance(user);
+        Self::_extend_persistent_ttl(&env, &key);
         env.storage().persistent().get(&key).unwrap_or(0)
     }
 
     pub(crate) fn _set_balance(env: &Env, user: Address, amount: i128) {
         let key = DataKey::Balance(user);
         env.storage().persistent().set(&key, &amount);
+        Self::_extend_persistent_ttl(env, &key);
     }
 
     fn _ensure_not_paused(env: &Env) -> Result<(), ContractError> {
+        Self::_extend_persistent_ttl(env, &DataKey::Paused);
         if Self::is_paused(env.clone()) {
             return Err(ContractError::ContractPaused);
         }
@@ -2307,6 +2394,10 @@ impl VirtualTokenContract {
     }
 
     fn _require_supported_schema(env: &Env) -> Result<u32, ContractError> {
+        Self::_extend_persistent_ttl(env, &DataKey::SchemaVersion);
+        if env.storage().persistent().has(&DataKey::Admin) {
+            Self::_extend_persistent_ttl(env, &DataKey::Admin);
+        }
         let v = Self::_schema_version(env).unwrap_or(1);
         if v == 0 || v > CURRENT_SCHEMA_VERSION {
             return Err(ContractError::UnsupportedSchemaVersion);
@@ -2364,7 +2455,18 @@ impl VirtualTokenContract {
         }
 
         env.storage().persistent().set(&key, &new_pending);
+        Self::_extend_persistent_ttl(env, &key);
         Ok(())
+    }
+
+    /// Bumps/extends the TTL of the given persistent storage key if its remaining TTL
+    /// is less than the threshold. Enforces rent policy (Issue #142).
+    fn _extend_persistent_ttl(env: &Env, key: &DataKey) {
+        if env.storage().persistent().has(key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(key, TTL_BUMP_THRESHOLD, TTL_BUMP_AMOUNT);
+        }
     }
 
     fn sort_addresses(addresses: Vec<Address>) -> Vec<Address> {
