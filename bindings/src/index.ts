@@ -1285,6 +1285,8 @@ export class Client extends ContractClient {
         is_oracle_live: this.txFromJSON<boolean>,
         set_oracle_stale_threshold: this.txFromJSON<Result<void>>,
         get_oracle_stale_threshold: this.txFromJSON<u64>,
+        set_max_precision_participants: this.txFromJSON<Result<void>>,\
+        get_max_precision_participants: this.txFromJSON<u32>,\
         set_min_participants: this.txFromJSON<Result<void>>,
         get_min_participants: this.txFromJSON<Option<u32>>
   }
