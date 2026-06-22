@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_AUDIT_VERSION: "0.22.2"
 
 permissions:
   contents: read
@@ -236,15 +237,24 @@ jobs:
         with:
           path: |
             ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-audit-v2-${{ env.CARGO_AUDIT_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-audit-
+            ${{ runner.os }}-cargo-audit-v2-${{ env.CARGO_AUDIT_VERSION }}-
+            ${{ runner.os }}-cargo-audit-v2-
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: |
+          if command -v cargo-audit >/dev/null 2>&1; then
+            echo "cargo-audit already available"
+          else
+            cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked
+          fi
+          cargo audit --version
 
       - name: Run dependency vulnerability audit
         # Fails on any vulnerability with CVSS score >= 7.0 (high/critical).

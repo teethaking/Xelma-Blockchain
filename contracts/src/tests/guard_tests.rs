@@ -69,6 +69,8 @@ fn test_guard_passes_after_round_resolved() {
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
 
     assert!(client.get_active_round().is_none());

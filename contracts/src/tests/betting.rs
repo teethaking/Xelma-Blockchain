@@ -1,5 +1,6 @@
 //! Tests for bet placement and validation.
 
+use super::config_helpers::{apply_max_stake, apply_max_user_exposure};
 use crate::contract::{VirtualTokenContract, VirtualTokenContractClient};
 use crate::errors::ContractError;
 use crate::types::BetSide;
@@ -261,7 +262,7 @@ fn test_bet_exceeds_max_stake_fails() {
     client.mint_initial(&user);
 
     // Set max stake to 50
-    client.set_max_stake(&Some(50_0000000i128));
+    apply_max_stake(&env, &client, Some(50_0000000i128));
     client.create_round(&1_0000000, &None);
 
     // Exactly at cap — should succeed
@@ -287,7 +288,7 @@ fn test_bet_at_max_stake_boundary_succeeds() {
     env.mock_all_auths();
     client.initialize(&admin, &oracle);
     client.mint_initial(&user);
-    client.set_max_stake(&Some(100_0000000i128));
+    apply_max_stake(&env, &client, Some(100_0000000i128));
     client.create_round(&1_0000000, &None);
 
     // Exactly at cap — must succeed
@@ -310,8 +311,8 @@ fn test_bet_no_max_stake_cap_disabled() {
     client.mint_initial(&user);
 
     // Set cap then disable it
-    client.set_max_stake(&Some(50_0000000i128));
-    client.set_max_stake(&None);
+    apply_max_stake(&env, &client, Some(50_0000000i128));
+    apply_max_stake(&env, &client, None);
 
     client.create_round(&1_0000000, &None);
 
@@ -333,7 +334,7 @@ fn test_exposure_cap_exceeded_fails() {
     env.mock_all_auths();
     client.initialize(&admin, &oracle);
     client.mint_initial(&user);
-    client.set_max_user_exposure(&Some(80_0000000i128));
+    apply_max_user_exposure(&env, &client, Some(80_0000000i128));
     client.create_round(&1_0000000, &None);
 
     let result = client.try_place_bet(&user, &100_0000000, &BetSide::Up);
@@ -353,7 +354,7 @@ fn test_exposure_cap_at_boundary_succeeds() {
     env.mock_all_auths();
     client.initialize(&admin, &oracle);
     client.mint_initial(&user);
-    client.set_max_user_exposure(&Some(100_0000000i128));
+    apply_max_user_exposure(&env, &client, Some(100_0000000i128));
     client.create_round(&1_0000000, &None);
 
     // Exactly at cap — must succeed
@@ -374,8 +375,8 @@ fn test_get_max_stake_returns_configured_value() {
     client.initialize(&admin, &oracle);
 
     assert_eq!(client.get_max_stake(), None);
-    client.set_max_stake(&Some(200_0000000i128));
+    apply_max_stake(&env, &client, Some(200_0000000i128));
     assert_eq!(client.get_max_stake(), Some(200_0000000i128));
-    client.set_max_stake(&None);
+    apply_max_stake(&env, &client, None);
     assert_eq!(client.get_max_stake(), None);
 }

@@ -2,6 +2,8 @@
 
 mod betting;
 mod chaos_recovery;
+mod config_helpers;
+mod config_timelock;
 mod cost_benchmarks;
 mod edge_cases;
 mod event_coverage;
@@ -16,4 +18,5 @@ mod property_invariants;
 mod resolution;
 mod security;
 mod storage_benchmarks;
+mod ttl_tests;
 mod windows;

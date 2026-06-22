@@ -188,6 +188,8 @@ fn test_full_round_lifecycle() {
         timestamp: env.ledger().timestamp(),
         round_id: 0,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
 
     // Round should be cleared
@@ -271,6 +273,8 @@ fn test_multiple_rounds_lifecycle() {
         timestamp: env.ledger().timestamp(),
         round_id: round1.start_ledger,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
     client.claim_winnings(&alice);
 
@@ -305,6 +309,8 @@ fn test_multiple_rounds_lifecycle() {
         timestamp: env.ledger().timestamp(),
         round_id: round2.start_ledger,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
 
     let stats = client.get_user_stats(&alice);
@@ -429,6 +435,8 @@ fn test_resolve_round_fails_without_oracle_auth() {
         timestamp: env.ledger().timestamp(),
         round_id: 0,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
     assert!(result.is_err());
 }
@@ -511,6 +519,8 @@ fn test_round_created_event_includes_mode() {
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
 
     client.create_round(&1_0000000, &Some(1));

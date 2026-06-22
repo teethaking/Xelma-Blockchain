@@ -36,6 +36,8 @@ sent back for detail before they are picked up.
    - `cd bindings && npm ci && npm run build`
    - `cd bindings && npm run test:parity` (ABI drift check; mirrors the CI `bindings-test` job)
 
+Before opening a PR, consult [`docs/CONTRIBUTOR_TASK_MATRIX.md`](./docs/CONTRIBUTOR_TASK_MATRIX.md) for task-type-specific test and evidence requirements.
+
 ## Security Checks (local)
 
 The CI `security-audit` job runs two checks that maintainers and contributors can reproduce locally.
@@ -44,7 +46,8 @@ The CI `security-audit` job runs two checks that maintainers and contributors ca
 
 ```bash
 # Install once
-cargo install cargo-audit --locked
+# Install once (pin matches CI CARGO_AUDIT_VERSION in .github/workflows/ci.yml)
+cargo install cargo-audit --version 0.22.2 --locked
 
 # Run from the repo root
 cargo audit --deny warnings

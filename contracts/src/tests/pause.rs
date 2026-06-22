@@ -8,7 +8,7 @@ use soroban_sdk::{
     Address, Env, IntoVal,
 };
 
-fn setup_contract(env: &Env) -> (VirtualTokenContractClient<'_>, Address, Address) {
+fn setup_contract(env: &Env) -> (VirtualTokenContractClient<'_>, Address, Address, Address) {
     let contract_id = env.register(VirtualTokenContract, ());
     let client = VirtualTokenContractClient::new(env, &contract_id);
     let admin = Address::generate(env);
@@ -17,13 +17,13 @@ fn setup_contract(env: &Env) -> (VirtualTokenContractClient<'_>, Address, Addres
     env.mock_all_auths();
     client.initialize(&admin, &oracle);
 
-    (client, admin, oracle)
+    (client, contract_id, admin, oracle)
 }
 
 #[test]
 fn test_pause_and_unpause_by_admin() {
     let env = Env::default();
-    let (client, _admin, _oracle) = setup_contract(&env);
+    let (client, _cid, _admin, _oracle) = setup_contract(&env);
 
     assert!(!client.is_paused());
 
@@ -64,7 +64,7 @@ fn test_pause_requires_admin_auth() {
 #[test]
 fn test_mutations_fail_while_paused() {
     let env = Env::default();
-    let (client, admin, oracle) = setup_contract(&env);
+    let (client, contract_id, admin, oracle) = setup_contract(&env);
     let user = Address::generate(&env);
 
     client.mint_initial(&user);
@@ -97,6 +97,8 @@ fn test_mutations_fail_while_paused() {
         timestamp: env.ledger().timestamp(),
         round_id: 0,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
     assert_eq!(resolve_result, Err(Ok(ContractError::ContractPaused)));
 
@@ -107,7 +109,7 @@ fn test_mutations_fail_while_paused() {
 #[test]
 fn test_mint_initial_fails_while_paused() {
     let env = Env::default();
-    let (client, _admin, _oracle) = setup_contract(&env);
+    let (client, _cid, _admin, _oracle) = setup_contract(&env);
     let user = Address::generate(&env);
 
     client.pause_contract();

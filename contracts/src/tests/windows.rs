@@ -1,5 +1,6 @@
 //! Tests for configurable betting and execution windows.
 
+use super::config_helpers::apply_windows;
 use crate::contract::{VirtualTokenContract, VirtualTokenContractClient};
 use crate::errors::ContractError;
 use crate::types::{BetSide, OraclePayload};
@@ -169,7 +170,7 @@ fn test_set_windows_does_not_mutate_state_on_validation_failure() {
 
     env.mock_all_auths();
     client.initialize(&admin, &oracle);
-    client.set_windows(&20, &40);
+    apply_windows(&env, &client, 20, 40);
 
     let result = client.try_set_windows(&41, &40);
     assert_eq!(result, Err(Ok(ContractError::InvalidDuration)));
@@ -198,7 +199,7 @@ fn test_create_round_uses_configured_windows() {
     client.initialize(&admin, &oracle);
 
     // Set custom windows
-    client.set_windows(&10, &20);
+    apply_windows(&env, &client, 10, 20);
 
     // Create round
     let start_price: u128 = 1_0000000;
@@ -261,7 +262,7 @@ fn test_betting_closes_at_bet_end_ledger() {
     client.mint_initial(&user);
 
     // Set windows: bet closes at ledger 6, round ends at ledger 12
-    client.set_windows(&6, &12);
+    apply_windows(&env, &client, 6, 12);
 
     // Create round
     client.create_round(&1_0000000, &None);
@@ -307,7 +308,7 @@ fn test_resolution_only_allowed_after_run_ledgers() {
     client.mint_initial(&user);
 
     // Set windows: bet closes at ledger 6, round ends at ledger 12
-    client.set_windows(&6, &12);
+    apply_windows(&env, &client, 6, 12);
 
     // Create round
     client.create_round(&1_0000000, &None);
@@ -326,6 +327,8 @@ fn test_resolution_only_allowed_after_run_ledgers() {
         timestamp: env.ledger().timestamp(),
         round_id: 0,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
     assert_eq!(result, Err(Ok(ContractError::RoundNotEnded)));
 
@@ -340,6 +343,8 @@ fn test_resolution_only_allowed_after_run_ledgers() {
         timestamp: env.ledger().timestamp(),
         round_id: 0,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
 
     // Round should be cleared
@@ -366,7 +371,7 @@ fn test_precision_prediction_respects_bet_window() {
     client.mint_initial(&user);
 
     // Set windows
-    client.set_windows(&6, &12);
+    apply_windows(&env, &client, 6, 12);
 
     // Create round in Precision mode
     client.create_round(&1_0000000, &Some(1));

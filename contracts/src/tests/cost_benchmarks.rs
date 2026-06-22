@@ -68,7 +68,13 @@ fn report(label: &str, cpu: u64, mem: u64) {
     std::println!("[bench] {label:<24} cpu={cpu:>12} mem={mem:>12}");
 }
 
-fn setup() -> (Env, Address, Address, VirtualTokenContractClient<'static>) {
+fn setup() -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    VirtualTokenContractClient<'static>,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register(VirtualTokenContract, ());
@@ -76,12 +82,12 @@ fn setup() -> (Env, Address, Address, VirtualTokenContractClient<'static>) {
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     client.initialize(&admin, &oracle);
-    (env, admin, oracle, client)
+    (env, contract_id, admin, oracle, client)
 }
 
 #[test]
 fn bench_cost_create_round() {
-    let (env, _admin, _oracle, client) = setup();
+    let (env, _cid, _admin, _oracle, client) = setup();
     let (cpu, mem, _) = measure(&env, || client.create_round(&1_0000000u128, &None));
     report("create_round", cpu, mem);
     assert!(
@@ -96,7 +102,7 @@ fn bench_cost_create_round() {
 
 #[test]
 fn bench_cost_place_bet() {
-    let (env, _admin, _oracle, client) = setup();
+    let (env, _cid, _admin, _oracle, client) = setup();
     let alice = Address::generate(&env);
     client.mint_initial(&alice);
     client.create_round(&1_0000000u128, &None);
@@ -111,7 +117,7 @@ fn bench_cost_place_bet() {
 
 #[test]
 fn bench_cost_precision_submit() {
-    let (env, _admin, _oracle, client) = setup();
+    let (env, _cid, _admin, _oracle, client) = setup();
     let alice = Address::generate(&env);
     client.mint_initial(&alice);
     client.create_round(&1_0000000u128, &Some(1)); // Precision mode
@@ -130,7 +136,7 @@ fn bench_cost_precision_submit() {
 
 #[test]
 fn bench_cost_resolve_round() {
-    let (env, _admin, _oracle, client) = setup();
+    let (env, contract_id, _admin, _oracle, client) = setup();
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
     client.mint_initial(&alice);
@@ -146,6 +152,8 @@ fn bench_cost_resolve_round() {
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     };
     let (cpu, mem, _) = measure(&env, || client.resolve_round(&payload));
     report("resolve_round", cpu, mem);
@@ -161,7 +169,7 @@ fn bench_cost_resolve_round() {
 
 #[test]
 fn bench_cost_claim_winnings() {
-    let (env, _admin, _oracle, client) = setup();
+    let (env, contract_id, _admin, _oracle, client) = setup();
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
     client.mint_initial(&alice);
@@ -177,6 +185,8 @@ fn bench_cost_claim_winnings() {
         timestamp: env.ledger().timestamp(),
         round_id: round.start_ledger,
         nonce: 1u64,
+        network_id: env.ledger().network_id(),
+        contract_addr: contract_id.clone(),
     });
 
     let (cpu, mem, claimed) = measure(&env, || client.claim_winnings(&alice));

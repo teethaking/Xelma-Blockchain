@@ -80,28 +80,31 @@ pub enum ContractError {
     /// Oracle heartbeat status is out of range (must be 0, 1, or 2)
     InvalidOracleStatus = 36,
     /// Oracle stale threshold is out of valid range (must be 60–86400 seconds)
-    InvalidStaleThreshold = 35,
-    /// Precision round has reached the configured participant cap
-    PrecisionParticipantCapExceeded = 36,
-    /// Precision participant cap is out of range (must be 1â€“10000)
-    InvalidPrecisionParticipantCap = 37,
     InvalidStaleThreshold = 37,
+    /// Precision participant cap is out of range (must be 1–10000)
+    InvalidPrecisionParticipantCap = 38,
+    /// Precision round has reached the configured participant cap
+    PrecisionParticipantCapExceeded = 39,
     /// Oracle max deviation bps is invalid (must be > 0)
-    InvalidOracleDeviationBps = 38,
+    InvalidOracleDeviationBps = 40,
     /// Oracle final price deviates beyond configured threshold
-    OracleDeviationExceeded = 39,
+    OracleDeviationExceeded = 41,
     /// Stored schema version is unknown or unsupported by this contract build
-    UnsupportedSchemaVersion = 40,
+    UnsupportedSchemaVersion = 42,
     /// Migration path is invalid for the stored schema version
-    InvalidMigrationPath = 41,
+    InvalidMigrationPath = 43,
     /// Migration cannot run while a round is active
-    MigrationActiveRound = 42,
+    MigrationActiveRound = 44,
     /// Commitment for precision prediction not found
-    CommitmentNotFound = 43,
+    CommitmentNotFound = 45,
     /// Precision prediction has already been revealed
-    AlreadyRevealed = 44,
+    AlreadyRevealed = 46,
     /// Attempted to reveal prediction outside the valid window
-    InvalidRevealWindow = 45,
+    InvalidRevealWindow = 47,
     /// Revealed prediction hash does not match committed hash
-    HashMismatch = 46,
+    HashMismatch = 48,
+    /// Oracle payload network_id does not match the runtime network
+    OracleNetworkMismatch = 49,
+    /// Oracle payload contract_addr does not match the current contract
+    OracleContractMismatch = 50,
 }
