@@ -255,6 +255,70 @@ let resolved = events.iter().find(|(_, topics, _)| {
 
 ---
 
+## `("protocol", "fee_collected")` — Competitive-settlement fee accrual
+
+Emitted by every competitive-settlement path (UpDown indexed/legacy, Precision
+indexed/legacy) when the protocol fee is enabled (Issue #162). NOT emitted on
+refund / cancel / fallback paths — those return users' full stake and the
+treasury stays flat.
+
+| Field         | Type      | Description                                                |
+|---------------|-----------|------------------------------------------------------------|
+| `round_id`    | `u64`     | The id of the settled round.                                |
+| `fee_amount`  | `i128`    | Stroops routed to the on-chain treasury this round.         |
+| `treasury_balance` | `i128` | Cumulative treasury balance AFTER this round's credit.     |
+| `bps_active`  | `u32`     | The fee's bps that produced `fee_amount` (echoes storage).  |
+
+**Topics**: `("protocol", "fee_collected")`
+**Source contracts**: `VirtualTokenContract`
+**Emitted by**: `_record_winnings_indexed`, `_record_winnings_legacy`,
+`_resolve_precision_mode`, `_resolve_precision_legacy`.
+
+The conservation invariant
+`Σ payout_i + fee_amount == total_pot` holds for every emission. In the
+UpDown pathological case `fee > losing_pool` (very thin losing-side
+liquidity near the bps cap) the spillover is deducted from `winning_pool`
+so the invariant still holds and winners receive only their residual
+principal — documented inline in `_apply_protocol_fee_updown`.
+
+---
+
+## `("protocol", "fee_bps_set")` — Timelocked fee schedule applied
+
+Emitted exactly once when a previously-scheduled `ProtocolFeeBps` change
+passes its `activation_ledger` and is written to storage (Issue #162).
+
+| Field   | Type          | Description                                              |
+|---------|---------------|----------------------------------------------------------|
+| `bps`   | `Option<u32>` | New fee (None = fee disabled; Some(bps) = active).       |
+
+**Topics**: `("protocol", "fee_bps_set")`
+**Source contracts**: `VirtualTokenContract`
+**Emitted by**: `_apply_config_payload` arm for `ConfigChangeKind::ProtocolFeeBps`.
+
+---
+
+## `("protocol", "fee_withdrawn")` — Treasury drain to recipient
+
+Emitted when the admin drains accumulated fees to an on-chain recipient
+(Issue #162). Recipient receives the credited amount through the existing
+`PendingWinnings` → `claim_winnings` flow used by competitive payouts and
+refunds, so no new authorization surface is added.
+
+| Field           | Type     | Description                                              |
+|-----------------|----------|----------------------------------------------------------|
+| `recipient`     | `Address`| The credited account.                                    |
+| `amount`        | `i128`   | Stroops transferred out of the treasury this call.       |
+| `new_treasury`  | `i128`   | Treasury balance after withdrawal.                       |
+
+**Topics**: `("protocol", "fee_withdrawn")`
+**Source contracts**: `VirtualTokenContract`
+**Emitted by**: `withdraw_protocol_fee`.
+
+---
+
+---
+
 ## Field units quick reference
 
 | Concept        | Unit       | Scale factor | Example                              |

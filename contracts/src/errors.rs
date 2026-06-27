@@ -107,4 +107,8 @@ pub enum ContractError {
     OracleNetworkMismatch = 49,
     /// Oracle payload contract_addr does not match the current contract
     OracleContractMismatch = 50,
+    /// Protocol fee bps is outside the allowed range (must be in `1..=MAX_PROTOCOL_FEE_BPS`)
+    InvalidProtocolFeeBps = 51,
+    /// Treasury withdrawal would underflow the accumulated treasury balance
+    FeeTreasuryUnderflow = 52,
 }
