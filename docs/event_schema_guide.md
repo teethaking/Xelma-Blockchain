@@ -46,7 +46,22 @@ Emitted when a round is resolved with the final price from the oracle.
 * **Payload:** `(round_id: u64, final_price: u128, mode: u32)`
   * `mode`: `0` for `UpDown`, `1` for `Precision`
 
-### 8. Round Cancelled
+### 8. Outcome Loss
+Emitted per losing participant when a round settles competitively
+(Issue #168). Complements the existing payout/refund events so that
+analytics, user notifications, and indexers no longer need to infer losses
+from the absence of payout events.
+* **Topics:** `("outcome", "loss")`
+* **Payload:** `(user: Address, round_id: u64, mode: u32, amount: i128, side: u32, predicted_price: u128)`
+  * `mode`: `0` for `UpDown`, `1` for `Precision`
+  * UpDown losers: `side` is `0` for Up or `1` for Down; `predicted_price` is `0`
+  * Precision losers: `side` is `0`; `predicted_price` is the user's guess (`0` if only committed and unrevealed)
+
+Not emitted on refund paths (price-unchanged refund, one-sided pool
+refund, min-participants fallback, admin cancellation) — those paths use
+their respective refund-prone events instead.
+
+### 9. Round Cancelled
 Emitted when an active round is cancelled by the admin.
 * **Topics:** `("round", "cancelled")`
 * **Payload:** `(round_id: u64, reason: u32, pool_up: i128, pool_down: i128)`

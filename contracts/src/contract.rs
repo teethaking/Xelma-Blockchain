@@ -1797,6 +1797,7 @@ impl VirtualTokenContract {
                 } else if price_went_up {
                     Self::_record_winnings_legacy(
                         env,
+                        round.round_id,
                         &positions,
                         BetSide::Up,
                         round.pool_up,
@@ -1805,6 +1806,7 @@ impl VirtualTokenContract {
                 } else if price_went_down {
                     Self::_record_winnings_legacy(
                         env,
+                        round.round_id,
                         &positions,
                         BetSide::Down,
                         round.pool_down,
@@ -1835,8 +1837,13 @@ impl VirtualTokenContract {
     }
 
     /// Legacy winnings path — reads the bulk Map blob.
+    ///
+    /// `round_id` is threaded in so that the per-loser `("outcome", "loss")`
+    /// observability event (Issue #168) emitted in the loser branch can carry
+    /// the correct round identifier without an extra storage read.
     fn _record_winnings_legacy(
         env: &Env,
+        round_id: u64,
         positions: &Map<Address, UserPosition>,
         winning_side: BetSide,
         winning_pool: i128,
@@ -1863,6 +1870,27 @@ impl VirtualTokenContract {
                         Self::_accumulate_pending(env, user.clone(), payout)?;
                         Self::_update_stats_win(env, user)?;
                     } else {
+                        // Emit outcome loss event for UpDown loser (Issue #168).
+                        // Topic: ("outcome", "loss")
+                        // Payload: (user, round_id, mode=0=UpDown, amount, side, predicted_price=0)
+                        // `predicted_price` is fixed at 0 for UpDown since this event
+                        // field is only meaningful in Precision mode.
+                        let side_value: u32 = match position.side {
+                            BetSide::Up => 0,
+                            BetSide::Down => 1,
+                        };
+                        #[allow(deprecated)]
+                        env.events().publish(
+                            (symbol_short!("outcome"), symbol_short!("loss")),
+                            (
+                                user.clone(),
+                                round_id,
+                                0u32,
+                                position.amount,
+                                side_value,
+                                0u128,
+                            ),
+                        );
                         Self::_update_stats_loss(env, user)?;
                     }
                 }
@@ -1898,15 +1926,30 @@ impl VirtualTokenContract {
             if legacy.is_empty() {
                 return Ok(());
             }
-            return Self::_resolve_precision_legacy(env, &legacy, final_price);
+            return Self::_resolve_precision_legacy(env, round_id, &legacy, final_price);
         }
 
-        // Find minimum difference and collect all winners
+        // Find minimum difference and collect all winners.
+        //
+        // We also cache `(amount, predicted_price)` per participant during this
+        // first pass so the loser branch (which emits the `("outcome", "loss")`
+        // observability event introduced by Issue #168) does not need to fetch
+        // the same composite keys a second time. Halving the per-loser read
+        // count is material for rounds at the participant cap (1 000).
         let mut min_diff: Option<u128> = None;
         let mut winners: Vec<PrecisionPrediction> = Vec::new(env);
         let mut total_pot: i128 = 0;
+        // Per-participant snapshot of (amount, predicted_price-or-0-for-unrevealed).
+        // Indexed by the same order as `participants`; each loser can be looked
+        // up directly by its position without any extra storage access.
+        let mut participant_amounts: Vec<i128> = Vec::new(env);
+        let mut participant_prices: Vec<u128> = Vec::new(env);
+        // Per-participant winner flag, populated in lockstep with the amount /
+        // price snapshots above. Used by the loser branch to do O(N) winner
+        // detection (instead of the O(N^2) `winners.iter().any(...)` lookup).
+        // Index `i` corresponds to `participants[i]` by construction.
+        let mut is_winner_mask: Vec<bool> = Vec::new(env);
 
-        // Single pass to build winners list and total pot
         for i in 0..participants.len() {
             if let Some(user) = participants.get(i) {
                 let pred_key = DataKey::PrecisionPosition(round_id, user.clone());
@@ -1922,7 +1965,9 @@ impl VirtualTokenContract {
                     .persistent()
                     .get::<_, PrecisionCommitment>(&commit_key);
 
-                // Add amount to total pot from prediction (revealed) or commitment (unrevealed)
+                // Add amount to total pot from prediction (revealed) or commitment (unrevealed).
+                // Also snapshot the amount and (revealed-or-zero) price so the
+                // loser branch below can emit the loss event without re-reading.
                 let amount = if let Some(ref pred) = pred_opt {
                     pred.amount
                 } else if let Some(ref commit) = commitment_opt {
@@ -1930,10 +1975,20 @@ impl VirtualTokenContract {
                 } else {
                     0
                 };
+                let cached_price = pred_opt
+                    .as_ref()
+                    .map(|p| p.predicted_price)
+                    .unwrap_or(0u128);
 
                 total_pot = total_pot
                     .checked_add(amount)
                     .ok_or(ContractError::Overflow)?;
+                participant_amounts.push_back(amount);
+                participant_prices.push_back(cached_price);
+                // Default to loser; flipped to `true` only when this
+                // participant holds the currently smallest diff, and reset
+                // to `false` if a tighter minimum is found later in the pass.
+                is_winner_mask.push_back(false);
 
                 if let Some(pred) = pred_opt {
                     let diff = if pred.predicted_price >= final_price {
@@ -1950,14 +2005,22 @@ impl VirtualTokenContract {
                         None => {
                             min_diff = Some(diff);
                             winners.push_back(pred.clone());
+                            is_winner_mask.set(i, true);
                         }
                         Some(current_min) => {
                             if diff < current_min {
                                 min_diff = Some(diff);
                                 winners = Vec::new(env);
                                 winners.push_back(pred.clone());
+                                // Reset any prior winners; index `i` now holds
+                                // the sole winning prediction.
+                                for j in 0..i {
+                                    is_winner_mask.set(j, false);
+                                }
+                                is_winner_mask.set(i, true);
                             } else if diff == current_min {
                                 winners.push_back(pred.clone());
+                                is_winner_mask.set(i, true);
                             }
                         }
                     }
@@ -1992,11 +2055,56 @@ impl VirtualTokenContract {
                 }
             }
 
-            // Update stats for losers
+            // Update stats and emit loss events for losers (Issue #168).
+            //
+            // The loss event payload mirrors [`Self::_record_winnings_indexed`]:
+            // for Precision mode the relevant metadata is `predicted_price`,
+            // so `side` is fixed at 0 while `mode = 1`.
+            //
+            // `stake` and `predicted_price` are read from the cached snapshot
+            // populated during the winner-detection pass above, so this loop
+            // does not need to re-read the per-user precision/commitment keys.
+            //
+            // Ordering note: the per-loser `("outcome", "loss")` event is
+            // emitted BEFORE `_update_stats_loss` is called. Tests and indexers
+            // rely on this sequence — flipping the order would change the
+            // observable on-chain event stream for a loss-less winner-loss
+            // pair.
+            //
+            // For unrevealed commitments the guess is unknowable on-chain
+            // until reveal, so `predicted_price` is published as 0 to keep the
+            // payload shape uniform across all losers.
             for i in 0..participants.len() {
                 if let Some(user) = participants.get(i) {
-                    let is_winner = winners.iter().any(|w| w.user == user);
-                    if !is_winner {
+                    // O(1) winner lookup; the mask is filled in lockstep with
+                    // `participants` so the index is always valid.
+                    let was_winner = is_winner_mask.get(i).unwrap_or(false);
+                    if !was_winner {
+                        // Snapshot-driven. By construction `participants`,
+                        // `participant_amounts`, `participant_prices` and
+                        // `is_winner_mask` are all pushed exactly once per
+                        // iteration of the winner-detection pass above, so
+                        // index drift between the two passes is impossible.
+                        // `unwrap` would surface any future drift instead of
+                        // silently publishing a 0-stake loss event.
+                        let stake = participant_amounts.get(i).unwrap();
+                        let predicted_price = participant_prices.get(i).unwrap();
+
+                        // Emit outcome loss event for Precision loser (Issue #168).
+                        // Topic: ("outcome", "loss")
+                        // Payload: (user, round_id, mode=1=Precision, amount, side=0, predicted_price)
+                        #[allow(deprecated)]
+                        env.events().publish(
+                            (symbol_short!("outcome"), symbol_short!("loss")),
+                            (
+                                user.clone(),
+                                round_id,
+                                1u32,
+                                stake,
+                                0u32,
+                                predicted_price,
+                            ),
+                        );
                         Self::_update_stats_loss(env, user)?;
                     }
                 }
@@ -2008,8 +2116,12 @@ impl VirtualTokenContract {
 
     /// Legacy precision-mode resolution path — reads the bulk Map blob.
     /// Used only as a migration fallback; new rounds use indexed per-user keys.
+    ///
+    /// `round_id` is threaded in so the per-loser `("outcome", "loss")`
+    /// observability event (Issue #168) carries the correct round id.
     fn _resolve_precision_legacy(
         env: &Env,
+        round_id: u64,
         predictions_map: &Map<Address, PrecisionPrediction>,
         final_price: u128,
     ) -> Result<(), ContractError> {
@@ -2085,6 +2197,21 @@ impl VirtualTokenContract {
                 if let Some(pred) = predictions.get(i) {
                     let is_winner = winners.iter().any(|w| w.user == pred.user);
                     if !is_winner {
+                        // Emit outcome loss event for Precision loser (Issue #168).
+                        // Topic: ("outcome", "loss")
+                        // Payload: (user, round_id, mode=1=Precision, amount, side=0, predicted_price)
+                        #[allow(deprecated)]
+                        env.events().publish(
+                            (symbol_short!("outcome"), symbol_short!("loss")),
+                            (
+                                pred.user.clone(),
+                                round_id,
+                                1u32,
+                                pred.amount,
+                                0u32,
+                                pred.predicted_price,
+                            ),
+                        );
                         Self::_update_stats_loss(env, pred.user.clone())?;
                     }
                 }
@@ -2266,6 +2393,10 @@ impl VirtualTokenContract {
     ///
     /// Formula: payout = bet + (bet / winning_pool) * losing_pool
     /// Reads N individual position keys; no full-map deserialisation.
+    ///
+    /// Also emits a per-loser `("outcome", "loss")` event (Issue #168) so
+    /// indexers no longer need to infer losses from absence of payout
+    /// events.
     fn _record_winnings_indexed(
         env: &Env,
         round_id: u64,
@@ -2292,6 +2423,27 @@ impl VirtualTokenContract {
                         Self::_accumulate_pending(env, user.clone(), payout)?;
                         Self::_update_stats_win(env, user)?;
                     } else {
+                        // Emit outcome loss event for UpDown loser (Issue #168).
+                        // Topic: ("outcome", "loss")
+                        // Payload: (user, round_id, mode=0=UpDown, amount, side, predicted_price=0)
+                        // `predicted_price` is fixed at 0 for UpDown since this
+                        // field is only meaningful in Precision mode.
+                        let side_value: u32 = match position.side {
+                            BetSide::Up => 0,
+                            BetSide::Down => 1,
+                        };
+                        #[allow(deprecated)]
+                        env.events().publish(
+                            (symbol_short!("outcome"), symbol_short!("loss")),
+                            (
+                                user.clone(),
+                                round_id,
+                                0u32,
+                                position.amount,
+                                side_value,
+                                0u128,
+                            ),
+                        );
                         Self::_update_stats_loss(env, user)?;
                     }
                 }
